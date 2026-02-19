@@ -77,24 +77,24 @@ const ROOM_PRESETS = [
 // ── Phase 6: Enhanced annotation types grouped by category ────────
 const ANNOTATION_CATEGORIES = {
   plumbing: { label: "Plumbing", color: COLORS.accent, items: [
-    { id: "stack-pipe", icon: "\u2B06", label: "Stack Pipe" },
-    { id: "drain-cleanout", icon: "\u2298", label: "Drain Cleanout" },
-    { id: "sump-pit", icon: "\u2B07", label: "Sump/Ejector Pit" },
-    { id: "water-heater", icon: "\uD83D\uDD25", label: "Water Heater" },
-    { id: "plumbing", icon: "\uD83D\uDD27", label: "Plumbing (General)" },
+    { id: "stack-pipe", icon: "⬆", label: "Stack Pipe" },
+    { id: "drain-cleanout", icon: "⊘", label: "Drain Cleanout" },
+    { id: "sump-pit", icon: "⬇", label: "Sump/Ejector Pit" },
+    { id: "water-heater", icon: "🔥", label: "Water Heater" },
+    { id: "plumbing", icon: "🔧", label: "Plumbing (General)" },
   ]},
   electrical: { label: "Electrical", color: COLORS.yellow, items: [
-    { id: "electrical", icon: "\u26A1", label: "Electrical" },
-    { id: "panel", icon: "\u2B1B", label: "Electrical Panel" },
+    { id: "electrical", icon: "⚡", label: "Electrical" },
+    { id: "panel", icon: "⬛", label: "Electrical Panel" },
   ]},
   hvac: { label: "HVAC", color: COLORS.green, items: [
-    { id: "supply-vent", icon: "\u2191", label: "Supply Vent" },
-    { id: "return-vent", icon: "\u2193", label: "Return Vent" },
-    { id: "exhaust-fan", icon: "\uD83C\uDF00", label: "Exhaust Fan" },
+    { id: "supply-vent", icon: "↑", label: "Supply Vent" },
+    { id: "return-vent", icon: "↓", label: "Return Vent" },
+    { id: "exhaust-fan", icon: "🌀", label: "Exhaust Fan" },
   ]},
   other: { label: "Other", color: COLORS.red, items: [
-    { id: "gas-line", icon: "\uD83D\uDD36", label: "Gas Line" },
-    { id: "other", icon: "\uD83D\uDCCC", label: "Other" },
+    { id: "gas-line", icon: "🔶", label: "Gas Line" },
+    { id: "other", icon: "📌", label: "Other" },
   ]},
 };
 
@@ -110,9 +110,9 @@ Object.entries(ANNOTATION_CATEGORIES).forEach(([catKey, cat]) => {
 const resolveAnnotationType = (type) => ALL_ANNOTATION_TYPES[type] || ALL_ANNOTATION_TYPES["other"];
 
 const FEATURE_TYPES = [
-  { type: "door", label: "Door", icon: "\uD83D\uDEAA" },
-  { type: "window", label: "Window", icon: "\u2B1C" },
-  { type: "bulkhead", label: "Bulkhead", icon: "\u25AC" },
+  { type: "door", label: "Door", icon: "🚪" },
+  { type: "window", label: "Window", icon: "⬜" },
+  { type: "bulkhead", label: "Bulkhead", icon: "▬" },
 ];
 
 // ── Phase 4: Fixture definitions ──────────────────────────────────
@@ -399,10 +399,10 @@ function StairIndicator({ w, h }) {
 
 // ── Initial data ─────────────────────────────────────────────────
 const initialRooms = [
-  { id: uid(), name: "Basement Living Room", w: 280, h: 300, x: 260, y: 120, color: COLORS.green, finished: true, dimLabel: "19'4\" \u00d7 24'9\"", wallMaterial: "Drywall", floorMaterial: "LVP", ceilingType: "Drop Ceiling" },
-  { id: uid(), name: "Hallway / Corridor", w: 200, h: 240, x: 40, y: 120, color: COLORS.orange, finished: false, dimLabel: "17'7\" \u00d7 10'8\"", wallMaterial: "Drywall", floorMaterial: "Concrete", ceilingType: "Exposed" },
-  { id: uid(), name: "Bathroom", w: 160, h: 160, x: 40, y: 380, color: COLORS.cyan, finished: false, dimLabel: "12'2\" \u00d7 5'2\"", wallMaterial: "Moisture-Resistant", floorMaterial: "Tile", ceilingType: "Drywall" },
-  { id: uid(), name: "Unfinished Area", w: 120, h: 300, x: 560, y: 120, color: COLORS.red, finished: false, dimLabel: "5'11\" \u00d7 24'9\"", wallMaterial: "Exposed", floorMaterial: "Concrete", ceilingType: "Exposed" },
+  { id: uid(), name: "Basement Living Room", w: 280, h: 300, x: 260, y: 120, color: COLORS.green, finished: true, dimLabel: "19'4\" × 24'9\"", wallMaterial: "Drywall", floorMaterial: "LVP", ceilingType: "Drop Ceiling" },
+  { id: uid(), name: "Hallway / Corridor", w: 200, h: 240, x: 40, y: 120, color: COLORS.orange, finished: false, dimLabel: "17'7\" × 10'8\"", wallMaterial: "Drywall", floorMaterial: "Concrete", ceilingType: "Exposed" },
+  { id: uid(), name: "Bathroom", w: 160, h: 160, x: 40, y: 380, color: COLORS.cyan, finished: false, dimLabel: "12'2\" × 5'2\"", wallMaterial: "Moisture-Resistant", floorMaterial: "Tile", ceilingType: "Drywall" },
+  { id: uid(), name: "Unfinished Area", w: 120, h: 300, x: 560, y: 120, color: COLORS.red, finished: false, dimLabel: "5'11\" × 24'9\"", wallMaterial: "Exposed", floorMaterial: "Concrete", ceilingType: "Exposed" },
   { id: uid(), name: "Stairs", w: 120, h: 80, x: 560, y: 320, color: COLORS.purple, finished: true, dimLabel: "", wallMaterial: "Drywall", floorMaterial: "Carpet", ceilingType: "Drywall" },
 ];
 
@@ -909,25 +909,25 @@ function FloorPlanEditor() {
               saveStatus === "saved" ? COLORS.green :
               saveStatus === "error" ? COLORS.red : COLORS.textMuted,
             }}>
-              {saveStatus === "saving" ? "\u25CF Saving..." : saveStatus === "saved" ? "\u25CF Saved" : saveStatus === "error" ? "\u25CF Failed" : ""}
+              {saveStatus === "saving" ? "● Saving..." : saveStatus === "saved" ? "● Saved" : saveStatus === "error" ? "● Failed" : ""}
             </div>
           </div>
-          <div style={{ fontSize: 10, color: COLORS.textMuted, marginTop: 3 }}>Drag rooms \u00b7 Click to edit \u00b7 Auto-saves</div>
+          <div style={{ fontSize: 10, color: COLORS.textMuted, marginTop: 3 }}>Drag rooms · Click to edit · Auto-saves</div>
 
           {/* Toolbar */}
           <div style={{ display: "flex", gap: 4, marginTop: 8, flexWrap: "wrap" }}>
-            <button onClick={handleExport} style={{ ...smallBtn(COLORS.green), flex: "1 1 auto", textAlign: "center" }}>\u2193 Export</button>
-            <button onClick={() => fileInputRef.current?.click()} style={{ ...smallBtn(COLORS.orange), flex: "1 1 auto", textAlign: "center" }}>\u2191 Import</button>
-            <button onClick={handlePrint} style={{ ...smallBtn(COLORS.purple), flex: "1 1 auto", textAlign: "center" }}>\uD83D\uDDA8 Print</button>
+            <button onClick={handleExport} style={{ ...smallBtn(COLORS.green), flex: "1 1 auto", textAlign: "center" }}>↓ Export</button>
+            <button onClick={() => fileInputRef.current?.click()} style={{ ...smallBtn(COLORS.orange), flex: "1 1 auto", textAlign: "center" }}>↑ Import</button>
+            <button onClick={handlePrint} style={{ ...smallBtn(COLORS.purple), flex: "1 1 auto", textAlign: "center" }}>🖨 Print</button>
             <input ref={fileInputRef} type="file" accept=".json" onChange={handleImport} style={{ display: "none" }} />
           </div>
 
           {/* Undo/Redo */}
           <div style={{ display: "flex", gap: 4, marginTop: 6 }}>
             <button onClick={undo} disabled={historyIdx < 0}
-              style={{ ...smallBtn(COLORS.accent), flex: 1, textAlign: "center", opacity: historyIdx < 0 ? 0.3 : 1 }}>\u21A9 Undo</button>
+              style={{ ...smallBtn(COLORS.accent), flex: 1, textAlign: "center", opacity: historyIdx < 0 ? 0.3 : 1 }}>↩ Undo</button>
             <button onClick={redo} disabled={historyIdx >= historyLen - 2}
-              style={{ ...smallBtn(COLORS.accent), flex: 1, textAlign: "center", opacity: historyIdx >= historyLen - 2 ? 0.3 : 1 }}>\u21AA Redo</button>
+              style={{ ...smallBtn(COLORS.accent), flex: 1, textAlign: "center", opacity: historyIdx >= historyLen - 2 ? 0.3 : 1 }}>↪ Redo</button>
           </div>
 
           {/* Scale */}
@@ -947,12 +947,12 @@ function FloorPlanEditor() {
           {/* Zoom controls */}
           <div style={{ display: "flex", gap: 4, marginTop: 6, alignItems: "center" }}>
             <div style={{ fontSize: 9, color: COLORS.textMuted, textTransform: "uppercase", letterSpacing: 0.5 }}>Zoom:</div>
-            <button onClick={zoomOut} style={smallBtn(COLORS.accent)}>\u2212</button>
+            <button onClick={zoomOut} style={smallBtn(COLORS.accent)}>−</button>
             <span style={{ fontSize: 11, color: COLORS.accent, fontWeight: 600, minWidth: 40, textAlign: "center" }}>{Math.round(zoom * 100)}%</span>
             <button onClick={zoomIn} style={smallBtn(COLORS.accent)}>+</button>
             <button onClick={zoomReset} style={smallBtn(COLORS.textDim)}>Reset</button>
           </div>
-          <div style={{ fontSize: 9, color: COLORS.textMuted, marginTop: 3 }}>Ctrl+Scroll to zoom \u00b7 Shift+Drag to pan</div>
+          <div style={{ fontSize: 9, color: COLORS.textMuted, marginTop: 3 }}>Ctrl+Scroll to zoom · Shift+Drag to pan</div>
         </div>
 
         {/* Tab bar */}
@@ -996,7 +996,7 @@ function FloorPlanEditor() {
                     <span style={{ fontSize: 12, fontWeight: 600, color: selectedRoom === r.id ? r.color : COLORS.text }}>{r.name}</span>
                   </div>
                   <div style={{ fontSize: 10, color: COLORS.textMuted, marginTop: 2, marginLeft: 14 }}>
-                    {r.dimLabel || `${r.w}\u00d7${r.h}px`} \u00b7 {r.finished ? "\u2713 Finished" : "\u25CB Unfinished"}
+                    {r.dimLabel || `${r.w}×${r.h}px`} · {r.finished ? "✓ Finished" : "○ Unfinished"}
                   </div>
                   <div style={{ fontSize: 9, color: COLORS.textMuted, marginLeft: 14 }}>
                     {r.wallMaterial} / {r.floorMaterial} / {r.ceilingType}
@@ -1029,7 +1029,7 @@ function FloorPlanEditor() {
 
               {addingAnnotation && (
                 <div style={{ marginTop: 6, padding: 8, background: `${COLORS.yellow}11`, border: `1px solid ${COLORS.yellow}33`, borderRadius: 4, fontSize: 11, color: COLORS.yellow }}>
-                  \uD83D\uDC46 Click canvas to place
+                  👆 Click canvas to place
                   <button onClick={() => setAddingAnnotation(null)} style={{ ...smallBtn(COLORS.red), marginLeft: 8 }}>Cancel</button>
                 </div>
               )}
@@ -1095,7 +1095,7 @@ function FloorPlanEditor() {
                       background: selectedFeature === f.id ? `${COLORS.yellow}11` : "transparent",
                       color: selectedFeature === f.id ? COLORS.yellow : COLORS.textDim,
                     }}>
-                    {ft?.icon} {ft?.label} \u00b7 {rm?.name || "?"} \u00b7 {f.wall}
+                    {ft?.icon} {ft?.label} · {rm?.name || "?"} · {f.wall}
                   </div>
                 );
               })}
@@ -1124,7 +1124,7 @@ function FloorPlanEditor() {
                   </div>
                   {addingFixture && (
                     <div style={{ marginTop: 8, padding: 8, background: `${COLORS.cyan}11`, border: `1px solid ${COLORS.cyan}33`, borderRadius: 4, fontSize: 11, color: COLORS.cyan }}>
-                      \uD83D\uDC46 Click canvas to place {FIXTURE_TYPES.find((f) => f.type === addingFixture)?.label}
+                      👆 Click canvas to place {FIXTURE_TYPES.find((f) => f.type === addingFixture)?.label}
                       <button onClick={() => setAddingFixture(null)} style={{ ...smallBtn(COLORS.red), marginLeft: 8 }}>Cancel</button>
                     </div>
                   )}
@@ -1142,7 +1142,7 @@ function FloorPlanEditor() {
                       background: selectedFixture === fx.id ? `${COLORS.cyan}11` : "transparent",
                       color: selectedFixture === fx.id ? COLORS.cyan : COLORS.textDim,
                     }}>
-                    {ft?.label} \u00b7 {rm?.name || "?"} \u00b7 {fx.rotation}\u00b0
+                    {ft?.label} · {rm?.name || "?"} · {fx.rotation}\u00b0
                   </div>
                 );
               })}
@@ -1178,11 +1178,11 @@ function FloorPlanEditor() {
                     <span style={{ fontSize: 12, fontWeight: 600, color: COLORS.text }}>{p.name}</span>
                     <div style={{ display: "flex", gap: 4 }}>
                       <button onClick={() => handleLoadPlan(p.name)} style={smallBtn(COLORS.accent)}>Load</button>
-                      <button onClick={() => handleDeletePlan(p.name)} style={smallBtn(COLORS.red)}>\u00d7</button>
+                      <button onClick={() => handleDeletePlan(p.name)} style={smallBtn(COLORS.red)}>×</button>
                     </div>
                   </div>
                   <div style={{ fontSize: 9, color: COLORS.textMuted, marginTop: 2 }}>
-                    {p.rooms} rooms \u00b7 {p.fixtures} fixtures \u00b7 {p.annotations} annotations
+                    {p.rooms} rooms · {p.fixtures} fixtures · {p.annotations} annotations
                   </div>
                   <div style={{ fontSize: 9, color: COLORS.textDim }}>
                     {new Date(p.savedAt).toLocaleDateString()} {new Date(p.savedAt).toLocaleTimeString()}
@@ -1192,8 +1192,8 @@ function FloorPlanEditor() {
 
               <div style={{ fontSize: 10, color: COLORS.textMuted, margin: "16px 0 8px", textTransform: "uppercase", letterSpacing: 1 }}>File Operations</div>
               <div style={{ display: "flex", gap: 4 }}>
-                <button onClick={handleExport} style={{ ...smallBtn(COLORS.green), flex: 1, textAlign: "center" }}>\u2193 Export JSON</button>
-                <button onClick={() => fileInputRef.current?.click()} style={{ ...smallBtn(COLORS.orange), flex: 1, textAlign: "center" }}>\u2191 Import JSON</button>
+                <button onClick={handleExport} style={{ ...smallBtn(COLORS.green), flex: 1, textAlign: "center" }}>↓ Export JSON</button>
+                <button onClick={() => fileInputRef.current?.click()} style={{ ...smallBtn(COLORS.orange), flex: 1, textAlign: "center" }}>↑ Import JSON</button>
               </div>
               <div style={{ fontSize: 9, color: COLORS.textDim, marginTop: 6, lineHeight: 1.4 }}>
                 Export downloads a JSON file. Save it to the <span style={{ color: COLORS.accent }}>plans/</span> directory in the repo, then commit &amp; push to sync.
@@ -1208,7 +1208,7 @@ function FloorPlanEditor() {
         {/* Print header */}
         <div className="print-only" style={{ padding: "16px 24px", borderBottom: "2px solid #333" }}>
           <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>Basement Floor Plan</h1>
-          <div style={{ fontSize: 12, color: "#666", marginTop: 4 }}>Generated {new Date().toLocaleDateString()} \u00b7 Scale: {pxPerFoot}px/ft</div>
+          <div style={{ fontSize: 12, color: "#666", marginTop: 4 }}>Generated {new Date().toLocaleDateString()} · Scale: {pxPerFoot}px/ft</div>
         </div>
 
         <div ref={canvasRef}
@@ -1273,10 +1273,10 @@ function FloorPlanEditor() {
                         background: isResizing ? `${r.color}cc` : "transparent",
                         padding: isResizing ? "2px 8px" : 0, borderRadius: 3,
                       }}>
-                        {wLabel} \u00d7 {hLabel}
+                        {wLabel} × {hLabel}
                       </div>
                       <div style={{ fontSize: 9, color: (isResizing || isSel) ? r.color : COLORS.textMuted, marginTop: 2, userSelect: "none" }}>
-                        {sqft} sq ft \u00b7 {r.finished ? "\u2713" : "\u25CB"}
+                        {sqft} sq ft · {r.finished ? "✓" : "○"}
                       </div>
                       {/* Material summary on hover */}
                       {isSel && (
@@ -1425,7 +1425,7 @@ function FloorPlanEditor() {
               Click to place {addingAnnotation
                 ? resolveAnnotationType(addingAnnotation)?.label
                 : FIXTURE_TYPES.find((f) => f.type === addingFixture)?.label
-              } \u00b7 ESC to cancel
+              } · ESC to cancel
             </div>
           )}
         </div>
@@ -1450,11 +1450,11 @@ function FloorPlanEditor() {
                 <div style={{ fontSize: 9, color: COLORS.textMuted, textTransform: "uppercase", marginBottom: 3 }}>Dimensions</div>
                 <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
                   <input value={selRoom.dimLabel} onChange={(e) => updateRoom(selRoom.id, { dimLabel: e.target.value })} placeholder="auto" style={{ ...inputStyle, flex: 1 }} />
-                  <button onClick={() => updateRoom(selRoom.id, { dimLabel: `${pxToFtIn(selRoom.w, pxPerFoot)} \u00d7 ${pxToFtIn(selRoom.h, pxPerFoot)}` })}
-                    title="Set from current size" style={smallBtn(COLORS.accent)}>\u21BB</button>
+                  <button onClick={() => updateRoom(selRoom.id, { dimLabel: `${pxToFtIn(selRoom.w, pxPerFoot)} × ${pxToFtIn(selRoom.h, pxPerFoot)}` })}
+                    title="Set from current size" style={smallBtn(COLORS.accent)}>↻</button>
                 </div>
                 <div style={{ fontSize: 9, color: COLORS.textDim, marginTop: 2 }}>
-                  {pxToFtIn(selRoom.w, pxPerFoot)} \u00d7 {pxToFtIn(selRoom.h, pxPerFoot)} ({((selRoom.w / pxPerFoot) * (selRoom.h / pxPerFoot)).toFixed(0)} sq ft)
+                  {pxToFtIn(selRoom.w, pxPerFoot)} × {pxToFtIn(selRoom.h, pxPerFoot)} ({((selRoom.w / pxPerFoot) * (selRoom.h / pxPerFoot)).toFixed(0)} sq ft)
                 </div>
               </div>
               <div style={{ flex: "0 0 auto" }}>
@@ -1585,7 +1585,7 @@ function FloorPlanEditor() {
               <div style={{ flex: "0 0 auto" }}>
                 <div style={{ fontSize: 9, color: COLORS.textMuted, textTransform: "uppercase", marginBottom: 3 }}>Size</div>
                 <div style={{ fontSize: 10, color: COLORS.textDim }}>
-                  {pxToFtIn(selFixture.w, pxPerFoot)} \u00d7 {pxToFtIn(selFixture.h, pxPerFoot)}
+                  {pxToFtIn(selFixture.w, pxPerFoot)} × {pxToFtIn(selFixture.h, pxPerFoot)}
                 </div>
               </div>
               <div style={{ flex: "0 0 auto", alignSelf: "flex-end" }}>
