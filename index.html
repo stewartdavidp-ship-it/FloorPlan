@@ -1,0 +1,1501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Basement Floor Plan Editor</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; }
+  @media print {
+    .no-print { display: none !important; }
+    .print-only { display: block !important; }
+    body { overflow: visible !important; }
+    .canvas-wrapper { overflow: visible !important; transform: none !important; }
+    .canvas-content { transform: none !important; }
+  }
+  .print-only { display: none; }
+</style>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useRef, useCallback, useEffect, useMemo } = React;
+
+// ── Storage shim ──────────────────────────────────────────────────
+if (!window.storage) {
+  window.storage = {
+    async get(key) {
+      const v = localStorage.getItem(key);
+      return v ? { value: v } : null;
+    },
+    async set(key, value) {
+      localStorage.setItem(key, value);
+    },
+  };
+}
+
+// ── Constants ─────────────────────────────────────────────────────
+const GRID = 10;
+const snap = (v) => Math.round(v / GRID) * GRID;
+const uid = () => Math.random().toString(36).slice(2, 9);
+
+const pxToFtIn = (px, pxPerFoot) => {
+  const totalInches = Math.round((px / pxPerFoot) * 12);
+  const feet = Math.floor(totalInches / 12);
+  const inches = totalInches % 12;
+  if (inches === 0) return `${feet}'`;
+  return `${feet}'${inches}"`;
+};
+
+const SNAP_TOLERANCE = 6;
+
+const COLORS = {
+  bg: "#0f1117", surface: "#1a1d27", surfaceHover: "#22262f",
+  border: "#2a2e3a", borderLight: "#3a3f4d",
+  text: "#d4d4d8", textDim: "#71717a", textMuted: "#52525b",
+  accent: "#60a5fa", accentDim: "#2563eb",
+  green: "#4ade80", greenDim: "#166534",
+  orange: "#fb923c", orangeDim: "#9a3412",
+  red: "#f87171", redDim: "#991b1b",
+  purple: "#a78bfa", purpleDim: "#5b21b6",
+  yellow: "#fbbf24", cyan: "#22d3ee",
+};
+
+const ROOM_PRESETS = [
+  { name: "Room", w: 160, h: 120, color: COLORS.accent },
+  { name: "Bathroom", w: 140, h: 100, color: COLORS.cyan },
+  { name: "Hallway", w: 200, h: 80, color: COLORS.orange },
+  { name: "Closet", w: 60, h: 80, color: COLORS.purple },
+  { name: "Stairs", w: 120, h: 80, color: COLORS.purple },
+  { name: "Utility", w: 100, h: 100, color: COLORS.red },
+];
+
+// ── Phase 6: Enhanced annotation types grouped by category ────────
+const ANNOTATION_CATEGORIES = {
+  plumbing: { label: "Plumbing", color: COLORS.accent, items: [
+    { id: "stack-pipe", icon: "\u2B06", label: "Stack Pipe" },
+    { id: "drain-cleanout", icon: "\u2298", label: "Drain Cleanout" },
+    { id: "sump-pit", icon: "\u2B07", label: "Sump/Ejector Pit" },
+    { id: "water-heater", icon: "\uD83D\uDD25", label: "Water Heater" },
+    { id: "plumbing", icon: "\uD83D\uDD27", label: "Plumbing (General)" },
+  ]},
+  electrical: { label: "Electrical", color: COLORS.yellow, items: [
+    { id: "electrical", icon: "\u26A1", label: "Electrical" },
+    { id: "panel", icon: "\u2B1B", label: "Electrical Panel" },
+  ]},
+  hvac: { label: "HVAC", color: COLORS.green, items: [
+    { id: "supply-vent", icon: "\u2191", label: "Supply Vent" },
+    { id: "return-vent", icon: "\u2193", label: "Return Vent" },
+    { id: "exhaust-fan", icon: "\uD83C\uDF00", label: "Exhaust Fan" },
+  ]},
+  other: { label: "Other", color: COLORS.red, items: [
+    { id: "gas-line", icon: "\uD83D\uDD36", label: "Gas Line" },
+    { id: "other", icon: "\uD83D\uDCCC", label: "Other" },
+  ]},
+};
+
+// Flat lookup for annotation rendering
+const ALL_ANNOTATION_TYPES = {};
+Object.entries(ANNOTATION_CATEGORIES).forEach(([catKey, cat]) => {
+  cat.items.forEach((item) => {
+    ALL_ANNOTATION_TYPES[item.id] = { ...item, color: cat.color, category: catKey };
+  });
+});
+
+// Legacy compat — map old type names to new
+const resolveAnnotationType = (type) => ALL_ANNOTATION_TYPES[type] || ALL_ANNOTATION_TYPES["other"];
+
+const FEATURE_TYPES = [
+  { type: "door", label: "Door", icon: "\uD83D\uDEAA" },
+  { type: "window", label: "Window", icon: "\u2B1C" },
+  { type: "bulkhead", label: "Bulkhead", icon: "\u25AC" },
+];
+
+// ── Phase 4: Fixture definitions ──────────────────────────────────
+const FIXTURE_TYPES = [
+  { type: "toilet", label: "Toilet", w: 1.5, h: 2.5 },
+  { type: "vanity-single", label: "Single Vanity", w: 2, h: 1.5 },
+  { type: "vanity-double", label: "Double Vanity", w: 4, h: 1.5 },
+  { type: "shower", label: "Shower", w: 3, h: 3 },
+  { type: "bathtub", label: "Bathtub", w: 2.5, h: 5 },
+  { type: "washer", label: "Washer", w: 2.5, h: 2.5 },
+  { type: "dryer", label: "Dryer", w: 2.5, h: 2.5 },
+];
+
+// ── Phase 5: Material options ─────────────────────────────────────
+const WALL_MATERIALS = ["Drywall", "Moisture-Resistant", "Tile", "Wainscoting", "Exposed"];
+const FLOOR_MATERIALS = ["Concrete", "LVP", "Tile", "Carpet", "Hardwood", "Engineered"];
+const CEILING_TYPES = ["Exposed", "Drop Ceiling", "Drywall", "Coffered", "Open"];
+
+// ── Wall relationship detection (from original) ──────────────────
+function detectWallRelationships(rooms) {
+  const segments = [];
+  for (let i = 0; i < rooms.length; i++) {
+    for (let j = i + 1; j < rooms.length; j++) {
+      const a = rooms[i], b = rooms[j];
+      const aR = a.x + a.w, aB = a.y + a.h;
+      const bR = b.x + b.w, bB = b.y + b.h;
+      // Vertical edges
+      if (Math.abs(aR - b.x) <= SNAP_TOLERANCE) {
+        const oT = Math.max(a.y, b.y), oB = Math.min(aB, bB);
+        if (oB > oT) {
+          const wx = (aR + b.x) / 2;
+          segments.push({ type: "shared", orientation: "v", x1: wx, y1: oT, x2: wx, y2: oB, roomAId: a.id, roomBId: b.id });
+        }
+      }
+      if (Math.abs(a.x - bR) <= SNAP_TOLERANCE) {
+        const oT = Math.max(a.y, b.y), oB = Math.min(aB, bB);
+        if (oB > oT) {
+          const wx = (a.x + bR) / 2;
+          segments.push({ type: "shared", orientation: "v", x1: wx, y1: oT, x2: wx, y2: oB, roomAId: a.id, roomBId: b.id });
+        }
+      }
+      // Horizontal edges
+      if (Math.abs(aB - b.y) <= SNAP_TOLERANCE) {
+        const oL = Math.max(a.x, b.x), oR = Math.min(aR, bR);
+        if (oR > oL) {
+          const wy = (aB + b.y) / 2;
+          segments.push({ type: "shared", orientation: "h", x1: oL, y1: wy, x2: oR, y2: wy, roomAId: a.id, roomBId: b.id });
+        }
+      }
+      if (Math.abs(a.y - bB) <= SNAP_TOLERANCE) {
+        const oL = Math.max(a.x, b.x), oR = Math.min(aR, bR);
+        if (oR > oL) {
+          const wy = (a.y + bB) / 2;
+          segments.push({ type: "shared", orientation: "h", x1: oL, y1: wy, x2: oR, y2: wy, roomAId: a.id, roomBId: b.id });
+        }
+      }
+    }
+  }
+  return segments;
+}
+
+// ── Phase 4: Fixture SVG symbols (top-down architectural) ────────
+function FixtureSVG({ type, w, h }) {
+  const style = { width: w, height: h, display: "block" };
+  switch (type) {
+    case "toilet":
+      return (
+        <svg viewBox="0 0 30 50" style={style}>
+          <rect x="5" y="0" width="20" height="15" rx="2" fill="#556" stroke="#889" strokeWidth="1.5" />
+          <ellipse cx="15" cy="33" rx="13" ry="15" fill="#667" stroke="#889" strokeWidth="1.5" />
+          <ellipse cx="15" cy="33" rx="8" ry="10" fill="#445" stroke="#778" strokeWidth="1" />
+        </svg>
+      );
+    case "vanity-single":
+      return (
+        <svg viewBox="0 0 40 30" style={style}>
+          <rect x="1" y="1" width="38" height="28" rx="2" fill="#556" stroke="#889" strokeWidth="1.5" />
+          <ellipse cx="20" cy="15" rx="10" ry="8" fill="#445" stroke="#778" strokeWidth="1.5" />
+        </svg>
+      );
+    case "vanity-double":
+      return (
+        <svg viewBox="0 0 80 30" style={style}>
+          <rect x="1" y="1" width="78" height="28" rx="2" fill="#556" stroke="#889" strokeWidth="1.5" />
+          <ellipse cx="25" cy="15" rx="10" ry="8" fill="#445" stroke="#778" strokeWidth="1.5" />
+          <ellipse cx="55" cy="15" rx="10" ry="8" fill="#445" stroke="#778" strokeWidth="1.5" />
+        </svg>
+      );
+    case "shower":
+      return (
+        <svg viewBox="0 0 50 50" style={style}>
+          <rect x="1" y="1" width="48" height="48" rx="2" fill="#446" stroke="#889" strokeWidth="1.5" />
+          <line x1="1" y1="1" x2="49" y2="49" stroke="#667" strokeWidth="1" />
+          <line x1="49" y1="1" x2="1" y2="49" stroke="#667" strokeWidth="1" />
+          <circle cx="25" cy="25" r="4" fill="#778" />
+        </svg>
+      );
+    case "bathtub":
+      return (
+        <svg viewBox="0 0 40 80" style={style}>
+          <rect x="1" y="1" width="38" height="78" rx="10" fill="#446" stroke="#889" strokeWidth="1.5" />
+          <rect x="5" y="5" width="30" height="70" rx="8" fill="#334" stroke="#667" strokeWidth="1" />
+          <circle cx="20" cy="70" r="3" fill="#778" />
+        </svg>
+      );
+    case "washer":
+      return (
+        <svg viewBox="0 0 40 40" style={style}>
+          <rect x="1" y="1" width="38" height="38" rx="3" fill="#556" stroke="#889" strokeWidth="1.5" />
+          <circle cx="20" cy="22" r="12" fill="#445" stroke="#778" strokeWidth="1.5" />
+          <text x="20" y="8" textAnchor="middle" fontSize="8" fill="#aab" fontWeight="bold">W</text>
+        </svg>
+      );
+    case "dryer":
+      return (
+        <svg viewBox="0 0 40 40" style={style}>
+          <rect x="1" y="1" width="38" height="38" rx="3" fill="#556" stroke="#889" strokeWidth="1.5" />
+          <circle cx="20" cy="22" r="12" fill="#445" stroke="#778" strokeWidth="1.5" />
+          <text x="20" y="8" textAnchor="middle" fontSize="8" fill="#aab" fontWeight="bold">D</text>
+        </svg>
+      );
+    default:
+      return <svg viewBox="0 0 20 20" style={style}><rect width="20" height="20" fill="#555" /></svg>;
+  }
+}
+
+// ── Phase 3: Door arc SVG (architectural swing) ──────────────────
+function DoorArcSVG({ wall, len, thickness }) {
+  // Quarter-circle arc from hinge showing swing direction
+  const r = len;
+  if (wall === "top" || wall === "bottom") {
+    // Horizontal door — arc swings down (top) or up (bottom)
+    const sweepY = wall === "top" ? r : -r;
+    return (
+      <svg style={{ position: "absolute", width: len, height: len, left: 0, top: wall === "top" ? thickness : -len, overflow: "visible", pointerEvents: "none", opacity: 0.5 }}>
+        <path d={`M 0 ${wall === "top" ? 0 : len} A ${r} ${r} 0 0 ${wall === "top" ? 1 : 0} ${len} ${wall === "top" ? 0 : len}`}
+          fill="none" stroke="#d97706" strokeWidth="1.5" strokeDasharray="4,3" />
+        <line x1="0" y1={wall === "top" ? 0 : len} x2="0" y2={wall === "top" ? len : 0}
+          stroke="#d97706" strokeWidth="1" />
+      </svg>
+    );
+  } else {
+    // Vertical door — arc swings right (left wall) or left (right wall)
+    return (
+      <svg style={{ position: "absolute", width: len, height: len, left: wall === "left" ? thickness : -len, top: 0, overflow: "visible", pointerEvents: "none", opacity: 0.5 }}>
+        <path d={`M ${wall === "left" ? 0 : len} 0 A ${r} ${r} 0 0 ${wall === "left" ? 1 : 0} ${wall === "left" ? 0 : len} ${len}`}
+          fill="none" stroke="#d97706" strokeWidth="1.5" strokeDasharray="4,3" />
+        <line x1={wall === "left" ? 0 : len} y1="0" x2={wall === "left" ? len : 0} y2="0"
+          stroke="#d97706" strokeWidth="1" />
+      </svg>
+    );
+  }
+}
+
+// ── Phase 3: Architectural feature markers ───────────────────────
+function FeatureMarker({ feature, roomX, roomY, roomW, roomH, selected, onSelect, wallThickness }) {
+  const { type, wall, pos } = feature;
+  let x, y, fw, fh;
+  const len = type === "window" ? 30 : type === "bulkhead" ? 40 : 24;
+  const thickness = type === "bulkhead" ? wallThickness + 2 : wallThickness;
+
+  if (wall === "top") { x = roomX + pos - len / 2; y = roomY - thickness / 2; fw = len; fh = thickness; }
+  else if (wall === "bottom") { x = roomX + pos - len / 2; y = roomY + roomH - thickness / 2; fw = len; fh = thickness; }
+  else if (wall === "left") { x = roomX - thickness / 2; y = roomY + pos - len / 2; fw = thickness; fh = len; }
+  else { x = roomX + roomW - thickness / 2; y = roomY + pos - len / 2; fw = thickness; fh = len; }
+
+  const colors = {
+    door: { bg: "#92400e", border: "#d97706" },
+    window: { bg: "#1e40af", border: "#60a5fa" },
+    bulkhead: { bg: "#4a1d6e", border: "#a78bfa" },
+  };
+  const c = colors[type] || colors.door;
+
+  if (type === "window") {
+    // Architectural window: parallel lines with gap
+    return (
+      <div onClick={(e) => { e.stopPropagation(); onSelect(); }}
+        style={{
+          position: "absolute", left: x, top: y, width: fw, height: fh,
+          cursor: "pointer", zIndex: selected ? 25 : 15,
+          outline: selected ? `2px solid ${COLORS.yellow}` : "none", outlineOffset: 1,
+        }}
+        title="Window — click to select">
+        <svg style={{ width: "100%", height: "100%" }}>
+          {(wall === "top" || wall === "bottom") ? (
+            <>
+              <line x1="0" y1="1" x2={fw} y2="1" stroke="#60a5fa" strokeWidth="2" />
+              <line x1="0" y1={fh - 1} x2={fw} y2={fh - 1} stroke="#60a5fa" strokeWidth="2" />
+              <line x1={fw / 2} y1="0" x2={fw / 2} y2={fh} stroke="#60a5fa55" strokeWidth="1" />
+            </>
+          ) : (
+            <>
+              <line x1="1" y1="0" x2="1" y2={fh} stroke="#60a5fa" strokeWidth="2" />
+              <line x1={fw - 1} y1="0" x2={fw - 1} y2={fh} stroke="#60a5fa" strokeWidth="2" />
+              <line x1="0" y1={fh / 2} x2={fw} y2={fh / 2} stroke="#60a5fa55" strokeWidth="1" />
+            </>
+          )}
+        </svg>
+      </div>
+    );
+  }
+
+  if (type === "door") {
+    // Architectural door: gap in wall + swing arc
+    return (
+      <div onClick={(e) => { e.stopPropagation(); onSelect(); }}
+        style={{
+          position: "absolute", left: x, top: y, width: fw, height: fh,
+          background: COLORS.bg, border: `1px solid #d9770688`,
+          cursor: "pointer", zIndex: selected ? 25 : 15,
+          outline: selected ? `2px solid ${COLORS.yellow}` : "none", outlineOffset: 1,
+        }}
+        title="Door — click to select">
+        <DoorArcSVG wall={wall} len={len} thickness={fh > fw ? fw : fh} />
+      </div>
+    );
+  }
+
+  // Bulkhead — keep original style
+  return (
+    <div onClick={(e) => { e.stopPropagation(); onSelect(); }}
+      style={{
+        position: "absolute", left: x, top: y, width: fw, height: fh,
+        background: c.bg, border: `1.5px solid ${c.border}`,
+        cursor: "pointer", zIndex: selected ? 25 : 15, borderRadius: 0,
+        outline: selected ? `2px solid ${COLORS.yellow}` : "none", outlineOffset: 1,
+      }}
+      title="Bulkhead — click to select"
+    />
+  );
+}
+
+// ── Annotation pin ───────────────────────────────────────────────
+function AnnotationPin({ ann, selected, onSelect, onDragStart }) {
+  const t = resolveAnnotationType(ann.type);
+  return (
+    <div onMouseDown={(e) => { e.stopPropagation(); onDragStart(e); }}
+      onClick={(e) => { e.stopPropagation(); onSelect(); }}
+      style={{
+        position: "absolute", left: ann.x - 14, top: ann.y - 14,
+        width: 28, height: 28, borderRadius: "50%",
+        background: selected ? t.color : `${t.color}33`,
+        border: `2px solid ${t.color}`,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        fontSize: 14, cursor: "grab", zIndex: selected ? 30 : 20,
+        boxShadow: selected ? `0 0 12px ${t.color}55` : "none",
+        transition: "box-shadow 0.15s",
+      }}
+      title={ann.note || t.label}>
+      {t.icon}
+    </div>
+  );
+}
+
+// ── Phase 3: North arrow SVG ─────────────────────────────────────
+function NorthArrow() {
+  return (
+    <svg width="40" height="52" viewBox="0 0 40 52" style={{ position: "absolute", top: 10, right: 10, zIndex: 50, opacity: 0.7 }}>
+      <polygon points="20,2 28,22 20,18 12,22" fill="#60a5fa" stroke="#fff" strokeWidth="0.5" />
+      <polygon points="20,18 28,22 20,42 12,22" fill="#2563eb" stroke="#fff" strokeWidth="0.5" />
+      <text x="20" y="50" textAnchor="middle" fill="#fff" fontSize="10" fontWeight="bold" fontFamily="monospace">N</text>
+    </svg>
+  );
+}
+
+// ── Phase 3: Stair indicator ─────────────────────────────────────
+function StairIndicator({ w, h }) {
+  const isVert = h > w;
+  const steps = isVert ? Math.floor(h / 12) : Math.floor(w / 12);
+  return (
+    <svg style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none", opacity: 0.4 }}>
+      {Array.from({ length: steps }, (_, i) => (
+        isVert ?
+          <line key={i} x1="0" y1={i * (h / steps)} x2={w} y2={i * (h / steps)} stroke="#a78bfa" strokeWidth="1" /> :
+          <line key={i} x1={i * (w / steps)} y1="0" x2={i * (w / steps)} y2={h} stroke="#a78bfa" strokeWidth="1" />
+      ))}
+      <polygon
+        points={isVert ? `${w / 2 - 6},${h - 8} ${w / 2 + 6},${h - 8} ${w / 2},${h - 20}` : `${w - 8},${h / 2 - 6} ${w - 8},${h / 2 + 6} ${w - 20},${h / 2}`}
+        fill="#a78bfa" />
+      <text x={w / 2} y={isVert ? h - 2 : h / 2 + 3} textAnchor="middle" fill="#a78bfa" fontSize="8" fontWeight="bold" fontFamily="monospace">UP</text>
+    </svg>
+  );
+}
+
+// ── Initial data ─────────────────────────────────────────────────
+const initialRooms = [
+  { id: uid(), name: "Basement Living Room", w: 280, h: 300, x: 260, y: 120, color: COLORS.green, finished: true, dimLabel: "19'4\" \u00d7 24'9\"", wallMaterial: "Drywall", floorMaterial: "LVP", ceilingType: "Drop Ceiling" },
+  { id: uid(), name: "Hallway / Corridor", w: 200, h: 240, x: 40, y: 120, color: COLORS.orange, finished: false, dimLabel: "17'7\" \u00d7 10'8\"", wallMaterial: "Drywall", floorMaterial: "Concrete", ceilingType: "Exposed" },
+  { id: uid(), name: "Bathroom", w: 160, h: 160, x: 40, y: 380, color: COLORS.cyan, finished: false, dimLabel: "12'2\" \u00d7 5'2\"", wallMaterial: "Moisture-Resistant", floorMaterial: "Tile", ceilingType: "Drywall" },
+  { id: uid(), name: "Unfinished Area", w: 120, h: 300, x: 560, y: 120, color: COLORS.red, finished: false, dimLabel: "5'11\" \u00d7 24'9\"", wallMaterial: "Exposed", floorMaterial: "Concrete", ceilingType: "Exposed" },
+  { id: uid(), name: "Stairs", w: 120, h: 80, x: 560, y: 320, color: COLORS.purple, finished: true, dimLabel: "", wallMaterial: "Drywall", floorMaterial: "Carpet", ceilingType: "Drywall" },
+];
+
+// ── Defaults for backward compat ─────────────────────────────────
+function applyRoomDefaults(room) {
+  return {
+    wallMaterial: "Drywall",
+    floorMaterial: "Concrete",
+    ceilingType: "Exposed",
+    ...room,
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════
+// MAIN COMPONENT
+// ══════════════════════════════════════════════════════════════════
+function FloorPlanEditor() {
+  // ── State ────────────────────────────────────────────────────
+  const [rooms, setRooms] = useState(initialRooms);
+  const [annotations, setAnnotations] = useState([]);
+  const [features, setFeatures] = useState([]);
+  const [fixtures, setFixtures] = useState([]);
+  const [selectedRoom, setSelectedRoom] = useState(null);
+  const [selectedAnn, setSelectedAnn] = useState(null);
+  const [selectedFeature, setSelectedFeature] = useState(null);
+  const [selectedFixture, setSelectedFixture] = useState(null);
+  const [dragging, setDragging] = useState(null);
+  const [dragAnn, setDragAnn] = useState(null);
+  const [dragFixture, setDragFixture] = useState(null);
+  const [panel, setPanel] = useState("rooms");
+  const [addingAnnotation, setAddingAnnotation] = useState(null);
+  const [addingFeature, setAddingFeature] = useState(null);
+  const [addingFixture, setAddingFixture] = useState(null);
+  const [featureWall, setFeatureWall] = useState("top");
+  const canvasRef = useRef(null);
+  const canvasContentRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const didInteractRef = useRef(false);
+  const [resizing, setResizing] = useState(null);
+  const [pxPerFoot, setPxPerFoot] = useState(14);
+  const [showDimensions, setShowDimensions] = useState(true);
+  const [saveStatus, setSaveStatus] = useState("idle");
+  const [loaded, setLoaded] = useState(false);
+
+  // ── Phase 2: Undo/redo (ref-based for reliable snapshots) ───
+  const MAX_HISTORY = 20;
+  const historyRef = useRef([]);
+  const historyIndexRef = useRef(-1);
+  const [historyLen, setHistoryLen] = useState(0); // trigger re-renders for button state
+  const [historyIdx, setHistoryIdx] = useState(-1);
+  const isUndoingRef = useRef(false);
+
+  // Keep refs in sync with latest state for snapshotting
+  const stateRef = useRef({ rooms, annotations, features, fixtures });
+  stateRef.current = { rooms, annotations, features, fixtures };
+
+  const pushHistory = useCallback(() => {
+    if (isUndoingRef.current) return;
+    const { rooms: r, annotations: a, features: f, fixtures: fx } = stateRef.current;
+    const snapshot = {
+      rooms: JSON.parse(JSON.stringify(r)),
+      annotations: JSON.parse(JSON.stringify(a)),
+      features: JSON.parse(JSON.stringify(f)),
+      fixtures: JSON.parse(JSON.stringify(fx)),
+    };
+    const next = historyRef.current.slice(0, historyIndexRef.current + 1);
+    next.push(snapshot);
+    if (next.length > MAX_HISTORY) next.shift();
+    historyRef.current = next;
+    historyIndexRef.current = next.length - 1;
+    setHistoryLen(next.length);
+    setHistoryIdx(historyIndexRef.current);
+  }, []);
+
+  const undo = useCallback(() => {
+    if (historyIndexRef.current < 0) return;
+    isUndoingRef.current = true;
+    const snap = historyRef.current[historyIndexRef.current];
+    if (snap) {
+      setRooms(JSON.parse(JSON.stringify(snap.rooms)));
+      setAnnotations(JSON.parse(JSON.stringify(snap.annotations)));
+      setFeatures(JSON.parse(JSON.stringify(snap.features)));
+      setFixtures(JSON.parse(JSON.stringify(snap.fixtures)));
+      historyIndexRef.current -= 1;
+      setHistoryIdx(historyIndexRef.current);
+    }
+    setTimeout(() => { isUndoingRef.current = false; }, 50);
+  }, []);
+
+  const redo = useCallback(() => {
+    if (historyIndexRef.current >= historyRef.current.length - 2) return;
+    isUndoingRef.current = true;
+    const snap = historyRef.current[historyIndexRef.current + 2];
+    if (snap) {
+      setRooms(JSON.parse(JSON.stringify(snap.rooms)));
+      setAnnotations(JSON.parse(JSON.stringify(snap.annotations)));
+      setFeatures(JSON.parse(JSON.stringify(snap.features)));
+      setFixtures(JSON.parse(JSON.stringify(snap.fixtures)));
+      historyIndexRef.current += 1;
+      setHistoryIdx(historyIndexRef.current);
+    }
+    setTimeout(() => { isUndoingRef.current = false; }, 50);
+  }, []);
+
+  // ── Phase 7: Pan & Zoom ─────────────────────────────────────
+  const [zoom, setZoom] = useState(1);
+  const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const panStartRef = useRef(null);
+
+  const zoomIn = () => setZoom((z) => Math.min(3, z + 0.15));
+  const zoomOut = () => setZoom((z) => Math.max(0.25, z - 0.15));
+  const zoomReset = () => { setZoom(1); setPanOffset({ x: 0, y: 0 }); };
+
+  // Convert screen coords to canvas coords
+  const screenToCanvas = useCallback((clientX, clientY) => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return { x: 0, y: 0 };
+    return {
+      x: (clientX - rect.left - panOffset.x) / zoom,
+      y: (clientY - rect.top - panOffset.y) / zoom,
+    };
+  }, [zoom, panOffset]);
+
+  // ── Save/Load ───────────────────────────────────────────────
+  const buildSaveData = useCallback(() => ({
+    version: 2,
+    savedAt: new Date().toISOString(),
+    pxPerFoot, showDimensions,
+    rooms, annotations, features, fixtures,
+  }), [rooms, annotations, features, fixtures, pxPerFoot, showDimensions]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const result = await window.storage.get("floorplan:basement");
+        if (result?.value) {
+          const data = JSON.parse(result.value);
+          if (data.rooms) setRooms(data.rooms.map(applyRoomDefaults));
+          if (data.annotations) setAnnotations(data.annotations);
+          if (data.features) setFeatures(data.features);
+          if (data.fixtures) setFixtures(data.fixtures);
+          if (data.pxPerFoot) setPxPerFoot(data.pxPerFoot);
+          if (data.showDimensions !== undefined) setShowDimensions(data.showDimensions);
+          setSaveStatus("saved");
+        }
+      } catch (e) { /* use defaults */ }
+      setLoaded(true);
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!loaded) return;
+    const timeout = setTimeout(async () => {
+      try {
+        setSaveStatus("saving");
+        await window.storage.set("floorplan:basement", JSON.stringify(buildSaveData()));
+        setSaveStatus("saved");
+      } catch (e) { setSaveStatus("error"); }
+    }, 800);
+    return () => clearTimeout(timeout);
+  }, [rooms, annotations, features, fixtures, pxPerFoot, showDimensions, loaded, buildSaveData]);
+
+  // ── Export/Import ───────────────────────────────────────────
+  const handleExport = () => {
+    const data = buildSaveData();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `basement-floorplan-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click(); URL.revokeObjectURL(url);
+  };
+
+  const handleImport = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const data = JSON.parse(ev.target.result);
+        if (data.rooms) setRooms(data.rooms.map(applyRoomDefaults));
+        if (data.annotations) setAnnotations(data.annotations);
+        if (data.features) setFeatures(data.features);
+        if (data.fixtures) setFixtures(data.fixtures || []);
+        if (data.pxPerFoot) setPxPerFoot(data.pxPerFoot);
+        if (data.showDimensions !== undefined) setShowDimensions(data.showDimensions);
+        clearSelection();
+        setSaveStatus("saved");
+      } catch (err) { alert("Could not read file."); }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  };
+
+  // ── Phase 8: Print ─────────────────────────────────────────
+  const handlePrint = () => {
+    // Temporarily reset zoom/pan for print
+    const prevZoom = zoom;
+    const prevPan = { ...panOffset };
+    setZoom(1); setPanOffset({ x: 0, y: 0 });
+    setTimeout(() => {
+      window.print();
+      setZoom(prevZoom); setPanOffset(prevPan);
+    }, 100);
+  };
+
+  // ── Selection ───────────────────────────────────────────────
+  const clearSelection = () => {
+    setSelectedRoom(null); setSelectedAnn(null); setSelectedFeature(null); setSelectedFixture(null);
+  };
+
+  // ── Room drag ───────────────────────────────────────────────
+  const handleRoomMouseDown = useCallback((e, roomId) => {
+    e.stopPropagation();
+    if (addingAnnotation || addingFeature || addingFixture) return;
+    didInteractRef.current = true;
+    pushHistory();
+    const r = rooms.find((rm) => rm.id === roomId);
+    setDragging({ id: roomId, startX: e.clientX, startY: e.clientY, origX: r.x, origY: r.y });
+    setSelectedRoom(roomId); setSelectedAnn(null); setSelectedFeature(null); setSelectedFixture(null);
+    setPanel("rooms");
+    requestAnimationFrame(() => {
+      const el = document.querySelector(`[data-room-id="${roomId}"]`);
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+  }, [rooms, addingAnnotation, addingFeature, addingFixture, pushHistory]);
+
+  // ── Resize ──────────────────────────────────────────────────
+  const handleResizeMouseDown = useCallback((e, roomId, corner) => {
+    e.stopPropagation();
+    didInteractRef.current = true;
+    pushHistory();
+    const r = rooms.find((rm) => rm.id === roomId);
+    setResizing({ id: roomId, corner, startX: e.clientX, startY: e.clientY, origW: r.w, origH: r.h, origX: r.x, origY: r.y });
+  }, [rooms, pushHistory]);
+
+  // ── Annotation drag ─────────────────────────────────────────
+  const handleAnnDragStart = useCallback((e, annId) => {
+    didInteractRef.current = true;
+    pushHistory();
+    const a = annotations.find((an) => an.id === annId);
+    setDragAnn({ id: annId, startX: e.clientX, startY: e.clientY, origX: a.x, origY: a.y });
+    setSelectedAnn(annId); setSelectedRoom(null); setSelectedFeature(null); setSelectedFixture(null);
+  }, [annotations, pushHistory]);
+
+  // ── Fixture drag ────────────────────────────────────────────
+  const handleFixtureDragStart = useCallback((e, fixId) => {
+    e.stopPropagation();
+    didInteractRef.current = true;
+    pushHistory();
+    const f = fixtures.find((fx) => fx.id === fixId);
+    setDragFixture({ id: fixId, startX: e.clientX, startY: e.clientY, origX: f.x, origY: f.y });
+    setSelectedFixture(fixId); setSelectedRoom(null); setSelectedAnn(null); setSelectedFeature(null);
+  }, [fixtures, pushHistory]);
+
+  // ── Mouse move/up handler ───────────────────────────────────
+  useEffect(() => {
+    const handleMouseMove = (e) => {
+      if (dragging) {
+        const dx = (e.clientX - dragging.startX) / zoom;
+        const dy = (e.clientY - dragging.startY) / zoom;
+        setRooms((prev) => prev.map((r) => r.id === dragging.id ? { ...r, x: snap(dragging.origX + dx), y: snap(dragging.origY + dy) } : r));
+      }
+      if (resizing) {
+        const dx = (e.clientX - resizing.startX) / zoom;
+        const dy = (e.clientY - resizing.startY) / zoom;
+        setRooms((prev) => prev.map((r) => {
+          if (r.id !== resizing.id) return r;
+          let { origW, origH, origX, origY } = resizing;
+          let nw = origW, nh = origH, nx = origX, ny = origY;
+          if (resizing.corner.includes("r")) nw = Math.max(40, snap(origW + dx));
+          if (resizing.corner.includes("l")) { nw = Math.max(40, snap(origW - dx)); nx = snap(origX + dx); }
+          if (resizing.corner.includes("b")) nh = Math.max(40, snap(origH + dy));
+          if (resizing.corner.includes("t")) { nh = Math.max(40, snap(origH - dy)); ny = snap(origY + dy); }
+          return { ...r, w: nw, h: nh, x: nx, y: ny };
+        }));
+      }
+      if (dragAnn) {
+        const dx = (e.clientX - dragAnn.startX) / zoom;
+        const dy = (e.clientY - dragAnn.startY) / zoom;
+        setAnnotations((prev) => prev.map((a) => a.id === dragAnn.id ? { ...a, x: snap(dragAnn.origX + dx), y: snap(dragAnn.origY + dy) } : a));
+      }
+      if (dragFixture) {
+        const dx = (e.clientX - dragFixture.startX) / zoom;
+        const dy = (e.clientY - dragFixture.startY) / zoom;
+        setFixtures((prev) => prev.map((f) => f.id === dragFixture.id ? { ...f, x: snap(dragFixture.origX + dx), y: snap(dragFixture.origY + dy) } : f));
+      }
+      // Pan
+      if (isPanning && panStartRef.current) {
+        const dx = e.clientX - panStartRef.current.x;
+        const dy = e.clientY - panStartRef.current.y;
+        setPanOffset({ x: panStartRef.current.panX + dx, y: panStartRef.current.panY + dy });
+      }
+    };
+    const handleMouseUp = () => {
+      setDragging(null); setResizing(null); setDragAnn(null); setDragFixture(null);
+      setIsPanning(false); panStartRef.current = null;
+    };
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => { window.removeEventListener("mousemove", handleMouseMove); window.removeEventListener("mouseup", handleMouseUp); };
+  }, [dragging, resizing, dragAnn, dragFixture, isPanning, zoom]);
+
+  // ── Phase 8: Keyboard shortcuts ─────────────────────────────
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      // Don't capture when typing in input
+      if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
+
+      if (e.key === "Escape") {
+        clearSelection();
+        setAddingAnnotation(null); setAddingFeature(null); setAddingFixture(null);
+      }
+      if (e.key === "Delete" || e.key === "Backspace") {
+        if (selectedFixture) { pushHistory(); setFixtures((p) => p.filter((f) => f.id !== selectedFixture)); setSelectedFixture(null); }
+        else if (selectedFeature) { pushHistory(); setFeatures((p) => p.filter((f) => f.id !== selectedFeature)); setSelectedFeature(null); }
+        else if (selectedAnn) { pushHistory(); setAnnotations((p) => p.filter((a) => a.id !== selectedAnn)); setSelectedAnn(null); }
+        else if (selectedRoom) {
+          pushHistory();
+          setRooms((p) => p.filter((r) => r.id !== selectedRoom));
+          setFeatures((p) => p.filter((f) => f.roomId !== selectedRoom));
+          setFixtures((p) => p.filter((f) => f.roomId !== selectedRoom));
+          setSelectedRoom(null);
+        }
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) { e.preventDefault(); undo(); }
+      if ((e.ctrlKey || e.metaKey) && e.key === "z" && e.shiftKey) { e.preventDefault(); redo(); }
+      if ((e.ctrlKey || e.metaKey) && e.key === "y") { e.preventDefault(); redo(); }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedRoom, selectedAnn, selectedFeature, selectedFixture, undo, redo, pushHistory]);
+
+  // ── Phase 7: Wheel zoom ─────────────────────────────────────
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const handleWheel = (e) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        const delta = e.deltaY > 0 ? -0.08 : 0.08;
+        setZoom((z) => Math.max(0.25, Math.min(3, z + delta)));
+      }
+    };
+    canvas.addEventListener("wheel", handleWheel, { passive: false });
+    return () => canvas.removeEventListener("wheel", handleWheel);
+  }, []);
+
+  // ── Canvas click ────────────────────────────────────────────
+  const handleCanvasMouseDown = (e) => {
+    // Pan with shift+click or middle button
+    if (e.shiftKey || e.button === 1) {
+      setIsPanning(true);
+      panStartRef.current = { x: e.clientX, y: e.clientY, panX: panOffset.x, panY: panOffset.y };
+      e.preventDefault();
+      return;
+    }
+  };
+
+  const handleCanvasClick = (e) => {
+    if (didInteractRef.current) { didInteractRef.current = false; return; }
+    if (addingAnnotation) {
+      pushHistory();
+      const { x, y } = screenToCanvas(e.clientX, e.clientY);
+      setAnnotations((prev) => [...prev, { id: uid(), type: addingAnnotation, x: snap(x), y: snap(y), note: "" }]);
+      setAddingAnnotation(null);
+      return;
+    }
+    if (addingFixture && selectedRoom) {
+      pushHistory();
+      const room = rooms.find((r) => r.id === selectedRoom);
+      if (room) {
+        const ft = FIXTURE_TYPES.find((f) => f.type === addingFixture);
+        const fw = ft.w * pxPerFoot;
+        const fh = ft.h * pxPerFoot;
+        // Place in center of room
+        setFixtures((prev) => [...prev, {
+          id: uid(), type: addingFixture, roomId: selectedRoom,
+          x: room.x + (room.w - fw) / 2, y: room.y + (room.h - fh) / 2,
+          rotation: 0, w: fw, h: fh,
+        }]);
+        setAddingFixture(null);
+        return;
+      }
+    }
+    if (addingFeature && selectedRoom) {
+      pushHistory();
+      const room = rooms.find((r) => r.id === selectedRoom);
+      if (room) {
+        const wallLen = (featureWall === "top" || featureWall === "bottom") ? room.w : room.h;
+        setFeatures((prev) => [...prev, { id: uid(), roomId: selectedRoom, type: addingFeature, wall: featureWall, pos: wallLen / 2 }]);
+        setAddingFeature(null);
+        return;
+      }
+    }
+    clearSelection();
+  };
+
+  // ── CRUD helpers ────────────────────────────────────────────
+  const updateRoom = (id, updates) => { pushHistory(); setRooms((prev) => prev.map((r) => r.id === id ? { ...r, ...updates } : r)); };
+  const deleteRoom = (id) => { pushHistory(); setRooms((prev) => prev.filter((r) => r.id !== id)); setFeatures((prev) => prev.filter((f) => f.roomId !== id)); setFixtures((prev) => prev.filter((f) => f.roomId !== id)); clearSelection(); };
+  const deleteAnnotation = (id) => { pushHistory(); setAnnotations((prev) => prev.filter((a) => a.id !== id)); setSelectedAnn(null); };
+  const deleteFeature = (id) => { pushHistory(); setFeatures((prev) => prev.filter((f) => f.id !== id)); setSelectedFeature(null); };
+  const deleteFixture = (id) => { pushHistory(); setFixtures((prev) => prev.filter((f) => f.id !== id)); setSelectedFixture(null); };
+
+  const addRoom = (preset) => {
+    pushHistory();
+    const id = uid();
+    setRooms((prev) => [...prev, { id, name: preset.name, w: preset.w, h: preset.h, x: 100, y: 100, color: preset.color, finished: false, dimLabel: "", wallMaterial: "Drywall", floorMaterial: "Concrete", ceilingType: "Exposed" }]);
+    setSelectedRoom(id);
+  };
+
+  // ── Derived ─────────────────────────────────────────────────
+  const selRoom = rooms.find((r) => r.id === selectedRoom);
+  const selAnn = annotations.find((a) => a.id === selectedAnn);
+  const selFeat = features.find((f) => f.id === selectedFeature);
+  const selFixture = fixtures.find((f) => f.id === selectedFixture);
+
+  // ── Styles ──────────────────────────────────────────────────
+  const inputStyle = {
+    background: COLORS.surface, border: `1px solid ${COLORS.borderLight}`, color: COLORS.text,
+    padding: "6px 10px", borderRadius: 4, fontSize: 13, width: "100%", outline: "none", fontFamily: "'Courier New', monospace",
+  };
+  const selectStyle = { ...inputStyle, cursor: "pointer" };
+  const btnStyle = (active, color = COLORS.accent) => ({
+    padding: "6px 12px", borderRadius: 4, fontSize: 12, cursor: "pointer", border: "1px solid",
+    fontFamily: "'Courier New', monospace", fontWeight: 600, transition: "all 0.15s",
+    background: active ? `${color}22` : "transparent", borderColor: active ? color : COLORS.border, color: active ? color : COLORS.textDim,
+  });
+  const smallBtn = (color = COLORS.accent) => ({
+    padding: "4px 8px", borderRadius: 3, fontSize: 11, cursor: "pointer",
+    border: `1px solid ${color}55`, background: `${color}15`, color,
+    fontFamily: "'Courier New', monospace", fontWeight: 600,
+  });
+
+  // Wall thickness constant
+  const WALL_THICKNESS = 5;
+
+  return (
+    <div style={{ display: "flex", height: "100vh", background: COLORS.bg, color: COLORS.text, fontFamily: "'Courier New', monospace", overflow: "hidden" }}>
+
+      {/* ═══ LEFT PANEL ═══ */}
+      <div className="no-print" style={{ width: 280, borderRight: `1px solid ${COLORS.border}`, display: "flex", flexDirection: "column", flexShrink: 0 }}>
+        {/* Header */}
+        <div style={{ padding: "12px 16px", borderBottom: `1px solid ${COLORS.border}` }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: COLORS.accent, letterSpacing: 1 }}>FLOOR PLAN EDITOR</div>
+            <div style={{ fontSize: 10, fontWeight: 600, color:
+              saveStatus === "saving" ? COLORS.orange :
+              saveStatus === "saved" ? COLORS.green :
+              saveStatus === "error" ? COLORS.red : COLORS.textMuted,
+            }}>
+              {saveStatus === "saving" ? "\u25CF Saving..." : saveStatus === "saved" ? "\u25CF Saved" : saveStatus === "error" ? "\u25CF Failed" : ""}
+            </div>
+          </div>
+          <div style={{ fontSize: 10, color: COLORS.textMuted, marginTop: 3 }}>Drag rooms \u00b7 Click to edit \u00b7 Auto-saves</div>
+
+          {/* Toolbar */}
+          <div style={{ display: "flex", gap: 4, marginTop: 8, flexWrap: "wrap" }}>
+            <button onClick={handleExport} style={{ ...smallBtn(COLORS.green), flex: "1 1 auto", textAlign: "center" }}>\u2193 Export</button>
+            <button onClick={() => fileInputRef.current?.click()} style={{ ...smallBtn(COLORS.orange), flex: "1 1 auto", textAlign: "center" }}>\u2191 Import</button>
+            <button onClick={handlePrint} style={{ ...smallBtn(COLORS.purple), flex: "1 1 auto", textAlign: "center" }}>\uD83D\uDDA8 Print</button>
+            <input ref={fileInputRef} type="file" accept=".json" onChange={handleImport} style={{ display: "none" }} />
+          </div>
+
+          {/* Undo/Redo */}
+          <div style={{ display: "flex", gap: 4, marginTop: 6 }}>
+            <button onClick={undo} disabled={historyIdx < 0}
+              style={{ ...smallBtn(COLORS.accent), flex: 1, textAlign: "center", opacity: historyIdx < 0 ? 0.3 : 1 }}>\u21A9 Undo</button>
+            <button onClick={redo} disabled={historyIdx >= historyLen - 2}
+              style={{ ...smallBtn(COLORS.accent), flex: 1, textAlign: "center", opacity: historyIdx >= historyLen - 2 ? 0.3 : 1 }}>\u21AA Redo</button>
+          </div>
+
+          {/* Scale */}
+          <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ fontSize: 9, color: COLORS.textMuted, textTransform: "uppercase", letterSpacing: 0.5 }}>Scale:</div>
+            <input type="range" min="6" max="30" value={pxPerFoot} onChange={(e) => setPxPerFoot(Number(e.target.value))}
+              style={{ flex: 1, accentColor: COLORS.accent, height: 4 }} />
+            <div style={{ fontSize: 11, color: COLORS.accent, fontWeight: 600, minWidth: 50 }}>{pxPerFoot}px/ft</div>
+          </div>
+
+          <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, cursor: "pointer" }}>
+            <input type="checkbox" checked={showDimensions} onChange={(e) => setShowDimensions(e.target.checked)}
+              style={{ accentColor: COLORS.accent, width: 14, height: 14, cursor: "pointer" }} />
+            <span style={{ fontSize: 11, color: showDimensions ? COLORS.accent : COLORS.textMuted, fontWeight: 600 }}>Show dimensions</span>
+          </label>
+
+          {/* Zoom controls */}
+          <div style={{ display: "flex", gap: 4, marginTop: 6, alignItems: "center" }}>
+            <div style={{ fontSize: 9, color: COLORS.textMuted, textTransform: "uppercase", letterSpacing: 0.5 }}>Zoom:</div>
+            <button onClick={zoomOut} style={smallBtn(COLORS.accent)}>\u2212</button>
+            <span style={{ fontSize: 11, color: COLORS.accent, fontWeight: 600, minWidth: 40, textAlign: "center" }}>{Math.round(zoom * 100)}%</span>
+            <button onClick={zoomIn} style={smallBtn(COLORS.accent)}>+</button>
+            <button onClick={zoomReset} style={smallBtn(COLORS.textDim)}>Reset</button>
+          </div>
+          <div style={{ fontSize: 9, color: COLORS.textMuted, marginTop: 3 }}>Ctrl+Scroll to zoom \u00b7 Shift+Drag to pan</div>
+        </div>
+
+        {/* Tab bar */}
+        <div style={{ display: "flex", borderBottom: `1px solid ${COLORS.border}` }}>
+          {[["rooms", "Rooms"], ["annotate", "Annotate"], ["features", "Features"], ["fixtures", "Fixtures"]].map(([key, label]) => (
+            <button key={key} onClick={() => setPanel(key)} style={{
+              flex: 1, padding: "8px 0", border: "none", cursor: "pointer", fontSize: 10, fontWeight: 600,
+              fontFamily: "'Courier New', monospace", letterSpacing: 0.5,
+              background: panel === key ? COLORS.surface : "transparent",
+              color: panel === key ? COLORS.accent : COLORS.textMuted,
+              borderBottom: panel === key ? `2px solid ${COLORS.accent}` : "2px solid transparent",
+            }}>{label}</button>
+          ))}
+        </div>
+
+        {/* Panel content */}
+        <div style={{ flex: 1, overflowY: "auto", padding: "12px" }}>
+
+          {/* ═══ ROOMS PANEL ═══ */}
+          {panel === "rooms" && (
+            <div>
+              <div style={{ fontSize: 10, color: COLORS.textMuted, marginBottom: 8, textTransform: "uppercase", letterSpacing: 1 }}>Add Room</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 16 }}>
+                {ROOM_PRESETS.map((p) => (
+                  <button key={p.name} onClick={() => addRoom(p)} style={{
+                    padding: "8px", border: `1px solid ${p.color}44`, borderRadius: 4, cursor: "pointer",
+                    background: `${p.color}11`, color: p.color, fontSize: 11, fontFamily: "'Courier New', monospace", fontWeight: 600,
+                  }}>+ {p.name}</button>
+                ))}
+              </div>
+              <div style={{ fontSize: 10, color: COLORS.textMuted, marginBottom: 8, textTransform: "uppercase", letterSpacing: 1 }}>All Rooms ({rooms.length})</div>
+              {rooms.map((r) => (
+                <div key={r.id} data-room-id={r.id} onClick={() => { setSelectedRoom(r.id); setSelectedAnn(null); setSelectedFeature(null); setSelectedFixture(null); }}
+                  style={{
+                    padding: "8px 10px", marginBottom: 4, borderRadius: 4, cursor: "pointer",
+                    border: `1px solid ${selectedRoom === r.id ? r.color : COLORS.border}`,
+                    background: selectedRoom === r.id ? `${r.color}11` : "transparent",
+                  }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <div style={{ width: 8, height: 8, borderRadius: 2, background: r.color, flexShrink: 0 }} />
+                    <span style={{ fontSize: 12, fontWeight: 600, color: selectedRoom === r.id ? r.color : COLORS.text }}>{r.name}</span>
+                  </div>
+                  <div style={{ fontSize: 10, color: COLORS.textMuted, marginTop: 2, marginLeft: 14 }}>
+                    {r.dimLabel || `${r.w}\u00d7${r.h}px`} \u00b7 {r.finished ? "\u2713 Finished" : "\u25CB Unfinished"}
+                  </div>
+                  <div style={{ fontSize: 9, color: COLORS.textMuted, marginLeft: 14 }}>
+                    {r.wallMaterial} / {r.floorMaterial} / {r.ceilingType}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* ═══ ANNOTATE PANEL (Phase 6: grouped by category) ═══ */}
+          {panel === "annotate" && (
+            <div>
+              <div style={{ fontSize: 10, color: COLORS.textMuted, marginBottom: 8, textTransform: "uppercase", letterSpacing: 1 }}>Place Annotation</div>
+              <div style={{ fontSize: 10, color: COLORS.textMuted, marginBottom: 10 }}>Select type, then click on the canvas to place.</div>
+
+              {Object.entries(ANNOTATION_CATEGORIES).map(([catKey, cat]) => (
+                <div key={catKey} style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 9, color: cat.color, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4, fontWeight: 700 }}>{cat.label}</div>
+                  {cat.items.map((item) => (
+                    <button key={item.id} onClick={() => { setAddingAnnotation(item.id); setAddingFeature(null); setAddingFixture(null); }}
+                      style={{
+                        ...btnStyle(addingAnnotation === item.id, cat.color),
+                        width: "100%", marginBottom: 4, textAlign: "left", display: "flex", alignItems: "center", gap: 8, padding: "5px 10px",
+                      }}>
+                      <span style={{ fontSize: 14 }}>{item.icon}</span> {item.label}
+                    </button>
+                  ))}
+                </div>
+              ))}
+
+              {addingAnnotation && (
+                <div style={{ marginTop: 6, padding: 8, background: `${COLORS.yellow}11`, border: `1px solid ${COLORS.yellow}33`, borderRadius: 4, fontSize: 11, color: COLORS.yellow }}>
+                  \uD83D\uDC46 Click canvas to place
+                  <button onClick={() => setAddingAnnotation(null)} style={{ ...smallBtn(COLORS.red), marginLeft: 8 }}>Cancel</button>
+                </div>
+              )}
+
+              <div style={{ fontSize: 10, color: COLORS.textMuted, margin: "16px 0 8px", textTransform: "uppercase", letterSpacing: 1 }}>Placed ({annotations.length})</div>
+              {annotations.map((a) => {
+                const t = resolveAnnotationType(a.type);
+                return (
+                  <div key={a.id} onClick={() => { setSelectedAnn(a.id); setSelectedRoom(null); setSelectedFeature(null); setSelectedFixture(null); }}
+                    style={{
+                      padding: "6px 8px", marginBottom: 3, borderRadius: 4, cursor: "pointer", fontSize: 11,
+                      border: `1px solid ${selectedAnn === a.id ? t.color : COLORS.border}`,
+                      background: selectedAnn === a.id ? `${t.color}11` : "transparent", color: selectedAnn === a.id ? t.color : COLORS.textDim,
+                    }}>
+                    {t.icon} {a.note || t.label}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* ═══ FEATURES PANEL ═══ */}
+          {panel === "features" && (
+            <div>
+              <div style={{ fontSize: 10, color: COLORS.textMuted, marginBottom: 8, textTransform: "uppercase", letterSpacing: 1 }}>Add to Selected Room</div>
+              {!selectedRoom && <div style={{ fontSize: 11, color: COLORS.textMuted, padding: 8 }}>Select a room first.</div>}
+              {selectedRoom && (
+                <>
+                  <div style={{ fontSize: 11, color: COLORS.accent, marginBottom: 10 }}>Adding to: {selRoom?.name}</div>
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ fontSize: 10, color: COLORS.textMuted, marginBottom: 4 }}>Wall:</div>
+                    <div style={{ display: "flex", gap: 4 }}>
+                      {["top", "right", "bottom", "left"].map((w) => (
+                        <button key={w} onClick={() => setFeatureWall(w)} style={btnStyle(featureWall === w)}>{w}</button>
+                      ))}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {FEATURE_TYPES.map((f) => (
+                      <button key={f.type} onClick={() => {
+                        pushHistory();
+                        const room = rooms.find((r) => r.id === selectedRoom);
+                        if (room) {
+                          const wallLen = (featureWall === "top" || featureWall === "bottom") ? room.w : room.h;
+                          setFeatures((prev) => [...prev, { id: uid(), roomId: selectedRoom, type: f.type, wall: featureWall, pos: wallLen / 2 }]);
+                        }
+                      }} style={{ ...btnStyle(false, COLORS.green), display: "flex", alignItems: "center", gap: 4 }}>
+                        {f.icon} {f.label}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+              <div style={{ fontSize: 10, color: COLORS.textMuted, margin: "16px 0 8px", textTransform: "uppercase", letterSpacing: 1 }}>All Features ({features.length})</div>
+              {features.map((f) => {
+                const ft = FEATURE_TYPES.find((t) => t.type === f.type);
+                const rm = rooms.find((r) => r.id === f.roomId);
+                return (
+                  <div key={f.id} onClick={() => { setSelectedFeature(f.id); setSelectedRoom(f.roomId); setSelectedAnn(null); setSelectedFixture(null); }}
+                    style={{
+                      padding: "6px 8px", marginBottom: 3, borderRadius: 4, cursor: "pointer", fontSize: 11,
+                      border: `1px solid ${selectedFeature === f.id ? COLORS.yellow : COLORS.border}`,
+                      background: selectedFeature === f.id ? `${COLORS.yellow}11` : "transparent",
+                      color: selectedFeature === f.id ? COLORS.yellow : COLORS.textDim,
+                    }}>
+                    {ft?.icon} {ft?.label} \u00b7 {rm?.name || "?"} \u00b7 {f.wall}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* ═══ FIXTURES PANEL (Phase 4) ═══ */}
+          {panel === "fixtures" && (
+            <div>
+              <div style={{ fontSize: 10, color: COLORS.textMuted, marginBottom: 8, textTransform: "uppercase", letterSpacing: 1 }}>Place Fixture in Room</div>
+              {!selectedRoom && <div style={{ fontSize: 11, color: COLORS.textMuted, padding: 8 }}>Select a room first.</div>}
+              {selectedRoom && (
+                <>
+                  <div style={{ fontSize: 11, color: COLORS.accent, marginBottom: 10 }}>Placing in: {selRoom?.name}</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                    {FIXTURE_TYPES.map((ft) => (
+                      <button key={ft.type} onClick={() => { setAddingFixture(ft.type); setAddingAnnotation(null); setAddingFeature(null); }}
+                        style={{
+                          ...btnStyle(addingFixture === ft.type, COLORS.cyan),
+                          display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "8px 6px",
+                        }}>
+                        <div style={{ width: 32, height: 32 }}><FixtureSVG type={ft.type} w={32} h={32} /></div>
+                        <span style={{ fontSize: 10 }}>{ft.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                  {addingFixture && (
+                    <div style={{ marginTop: 8, padding: 8, background: `${COLORS.cyan}11`, border: `1px solid ${COLORS.cyan}33`, borderRadius: 4, fontSize: 11, color: COLORS.cyan }}>
+                      \uD83D\uDC46 Click canvas to place {FIXTURE_TYPES.find((f) => f.type === addingFixture)?.label}
+                      <button onClick={() => setAddingFixture(null)} style={{ ...smallBtn(COLORS.red), marginLeft: 8 }}>Cancel</button>
+                    </div>
+                  )}
+                </>
+              )}
+              <div style={{ fontSize: 10, color: COLORS.textMuted, margin: "16px 0 8px", textTransform: "uppercase", letterSpacing: 1 }}>All Fixtures ({fixtures.length})</div>
+              {fixtures.map((fx) => {
+                const ft = FIXTURE_TYPES.find((t) => t.type === fx.type);
+                const rm = rooms.find((r) => r.id === fx.roomId);
+                return (
+                  <div key={fx.id} onClick={() => { setSelectedFixture(fx.id); setSelectedRoom(fx.roomId); setSelectedAnn(null); setSelectedFeature(null); }}
+                    style={{
+                      padding: "6px 8px", marginBottom: 3, borderRadius: 4, cursor: "pointer", fontSize: 11,
+                      border: `1px solid ${selectedFixture === fx.id ? COLORS.cyan : COLORS.border}`,
+                      background: selectedFixture === fx.id ? `${COLORS.cyan}11` : "transparent",
+                      color: selectedFixture === fx.id ? COLORS.cyan : COLORS.textDim,
+                    }}>
+                    {ft?.label} \u00b7 {rm?.name || "?"} \u00b7 {fx.rotation}\u00b0
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ═══ CANVAS AREA ═══ */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+        {/* Print header */}
+        <div className="print-only" style={{ padding: "16px 24px", borderBottom: "2px solid #333" }}>
+          <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>Basement Floor Plan</h1>
+          <div style={{ fontSize: 12, color: "#666", marginTop: 4 }}>Generated {new Date().toLocaleDateString()} \u00b7 Scale: {pxPerFoot}px/ft</div>
+        </div>
+
+        <div ref={canvasRef}
+          onMouseDown={handleCanvasMouseDown}
+          onClick={handleCanvasClick}
+          className="canvas-wrapper"
+          style={{
+            flex: 1, position: "relative", overflow: "hidden",
+            background: COLORS.bg,
+            cursor: addingAnnotation || addingFixture ? "crosshair" : isPanning ? "grabbing" : "default",
+          }}>
+
+          {/* Dotted grid (rendered in content so it zooms) */}
+          <div ref={canvasContentRef} className="canvas-content"
+            style={{
+              position: "absolute", top: 0, left: 0,
+              width: 3000, height: 3000,
+              transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoom})`,
+              transformOrigin: "0 0",
+              backgroundImage: `radial-gradient(${COLORS.border} 1px, transparent 1px)`,
+              backgroundSize: `${GRID}px ${GRID}px`,
+            }}>
+
+            {/* North arrow */}
+            <NorthArrow />
+
+            {/* Rooms */}
+            {rooms.map((r) => {
+              const isSel = selectedRoom === r.id;
+              const roomFeatures = features.filter((f) => f.roomId === r.id);
+              const roomFixtures = fixtures.filter((f) => f.roomId === r.id);
+              const isResizing = resizing?.id === r.id;
+              const isDragging = dragging?.id === r.id;
+              const wLabel = pxToFtIn(r.w, pxPerFoot);
+              const hLabel = pxToFtIn(r.h, pxPerFoot);
+              const sqft = ((r.w / pxPerFoot) * (r.h / pxPerFoot)).toFixed(0);
+              const isStairs = /stair/i.test(r.name);
+
+              return (
+                <div key={r.id}>
+                  {/* Room box with architectural wall thickness */}
+                  <div
+                    onMouseDown={(e) => handleRoomMouseDown(e, r.id)}
+                    style={{
+                      position: "absolute", left: r.x, top: r.y, width: r.w, height: r.h,
+                      cursor: isDragging ? "grabbing" : "grab",
+                      zIndex: isSel ? 10 : 5,
+                      transition: isResizing || isDragging ? "none" : "border-color 0.15s, background 0.15s",
+                    }}>
+                    {/* Wall rendering — inset box shadow for thick walls */}
+                    <div style={{
+                      position: "absolute", inset: 0,
+                      border: `${WALL_THICKNESS}px ${r.finished ? "solid" : "dashed"} ${isSel ? r.color : `${r.color}88`}`,
+                      background: `${r.color}${isSel ? "12" : "06"}`,
+                    }} />
+                    {/* Room label */}
+                    <div style={{ position: "relative", width: "100%", height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", zIndex: 1 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: r.color, textAlign: "center", lineHeight: 1.3, userSelect: "none", padding: "0 8px" }}>{r.name}</div>
+                      <div style={{
+                        fontSize: 11, fontWeight: 600, marginTop: 4, userSelect: "none",
+                        color: (isResizing || isSel) ? "#fff" : `${r.color}bb`,
+                        background: isResizing ? `${r.color}cc` : "transparent",
+                        padding: isResizing ? "2px 8px" : 0, borderRadius: 3,
+                      }}>
+                        {wLabel} \u00d7 {hLabel}
+                      </div>
+                      <div style={{ fontSize: 9, color: (isResizing || isSel) ? r.color : COLORS.textMuted, marginTop: 2, userSelect: "none" }}>
+                        {sqft} sq ft \u00b7 {r.finished ? "\u2713" : "\u25CB"}
+                      </div>
+                      {/* Material summary on hover */}
+                      {isSel && (
+                        <div style={{ fontSize: 8, color: COLORS.textDim, marginTop: 3, userSelect: "none", textAlign: "center" }}>
+                          {r.wallMaterial} / {r.floorMaterial} / {r.ceilingType}
+                        </div>
+                      )}
+                    </div>
+                    {/* Stair indicator */}
+                    {isStairs && <StairIndicator w={r.w} h={r.h} />}
+                  </div>
+
+                  {/* Resize handles */}
+                  {isSel && (
+                    <>
+                      {/* Edge midpoints */}
+                      {[
+                        { c: "t", cursor: "ns-resize", style: { left: r.x + r.w / 2 - 7, top: r.y - 7 } },
+                        { c: "b", cursor: "ns-resize", style: { left: r.x + r.w / 2 - 7, top: r.y + r.h - 7 } },
+                        { c: "l", cursor: "ew-resize", style: { left: r.x - 7, top: r.y + r.h / 2 - 7 } },
+                        { c: "r", cursor: "ew-resize", style: { left: r.x + r.w - 7, top: r.y + r.h / 2 - 7 } },
+                      ].map(({ c, cursor, style }) => (
+                        <div key={c} onMouseDown={(e) => { e.stopPropagation(); handleResizeMouseDown(e, r.id, c); }}
+                          style={{ position: "absolute", width: 14, height: 14, background: "#fff", border: `2.5px solid ${r.color}`, borderRadius: "50%", cursor, zIndex: 20, boxShadow: `0 0 0 3px ${COLORS.bg}`, ...style }} />
+                      ))}
+                      {/* Corners */}
+                      {[
+                        { c: "tl", cursor: "nwse-resize", style: { left: r.x - 8, top: r.y - 8 } },
+                        { c: "tr", cursor: "nesw-resize", style: { left: r.x + r.w - 8, top: r.y - 8 } },
+                        { c: "bl", cursor: "nesw-resize", style: { left: r.x - 8, top: r.y + r.h - 8 } },
+                        { c: "br", cursor: "nwse-resize", style: { left: r.x + r.w - 8, top: r.y + r.h - 8 } },
+                      ].map(({ c, cursor, style }) => (
+                        <div key={c} onMouseDown={(e) => { e.stopPropagation(); handleResizeMouseDown(e, r.id, c); }}
+                          style={{ position: "absolute", width: 16, height: 16, background: r.color, border: "2.5px solid #fff", borderRadius: 3, cursor, zIndex: 21, boxShadow: `0 0 0 3px ${COLORS.bg}`, ...style }} />
+                      ))}
+                    </>
+                  )}
+
+                  {/* Dimension lines */}
+                  {isSel && (showDimensions || isResizing) && (
+                    <>
+                      {/* Width line above */}
+                      <div style={{ position: "absolute", left: r.x, top: r.y - 28, width: r.w, height: 20, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 11, pointerEvents: "none" }}>
+                        <div style={{ position: "absolute", left: 0, right: 0, top: 10, height: 1, background: `${r.color}88` }} />
+                        <div style={{ position: "absolute", left: 0, top: 5, width: 1, height: 12, background: `${r.color}88` }} />
+                        <div style={{ position: "absolute", right: 0, top: 5, width: 1, height: 12, background: `${r.color}88` }} />
+                        <span style={{ fontSize: 12, fontWeight: 700, color: "#fff", background: r.color, padding: "1px 8px", borderRadius: 3, position: "relative", zIndex: 1 }}>{wLabel}</span>
+                      </div>
+                      {/* Height line right */}
+                      <div style={{ position: "absolute", left: r.x + r.w + 10, top: r.y, width: 24, height: r.h, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 11, pointerEvents: "none" }}>
+                        <div style={{ position: "absolute", top: 0, bottom: 0, left: 11, width: 1, background: `${r.color}88` }} />
+                        <div style={{ position: "absolute", top: 0, left: 6, width: 12, height: 1, background: `${r.color}88` }} />
+                        <div style={{ position: "absolute", bottom: 0, left: 6, width: 12, height: 1, background: `${r.color}88` }} />
+                        <span style={{ fontSize: 12, fontWeight: 700, color: "#fff", background: r.color, padding: "1px 4px", borderRadius: 3, position: "relative", zIndex: 1, writingMode: "vertical-rl" }}>{hLabel}</span>
+                      </div>
+                    </>
+                  )}
+
+                  {/* Room features (doors, windows, bulkheads) */}
+                  {roomFeatures.map((f) => (
+                    <FeatureMarker key={f.id} feature={f} roomX={r.x} roomY={r.y} roomW={r.w} roomH={r.h}
+                      wallThickness={WALL_THICKNESS}
+                      selected={selectedFeature === f.id}
+                      onSelect={() => { setSelectedFeature(f.id); setSelectedRoom(r.id); setSelectedAnn(null); setSelectedFixture(null); }} />
+                  ))}
+
+                  {/* Room fixtures */}
+                  {roomFixtures.map((fx) => {
+                    const isFxSel = selectedFixture === fx.id;
+                    const ft = FIXTURE_TYPES.find((t) => t.type === fx.type);
+                    const fxW = fx.rotation === 90 || fx.rotation === 270 ? fx.h : fx.w;
+                    const fxH = fx.rotation === 90 || fx.rotation === 270 ? fx.w : fx.h;
+                    return (
+                      <div key={fx.id}
+                        onMouseDown={(e) => handleFixtureDragStart(e, fx.id)}
+                        onClick={(e) => { e.stopPropagation(); didInteractRef.current = true; setSelectedFixture(fx.id); setSelectedRoom(fx.roomId); setSelectedAnn(null); setSelectedFeature(null); }}
+                        style={{
+                          position: "absolute", left: fx.x, top: fx.y,
+                          width: fxW, height: fxH,
+                          cursor: "grab", zIndex: isFxSel ? 18 : 12,
+                          outline: isFxSel ? `2px solid ${COLORS.cyan}` : "none",
+                          outlineOffset: 2,
+                          transform: `rotate(${fx.rotation}deg)`,
+                          transformOrigin: "center center",
+                        }}
+                        title={`${ft?.label || fx.type} — drag to move`}>
+                        <FixtureSVG type={fx.type} w={fxW} h={fxH} />
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+
+            {/* Annotations */}
+            {annotations.map((a) => (
+              <AnnotationPin key={a.id} ann={a} selected={selectedAnn === a.id}
+                onSelect={() => { setSelectedAnn(a.id); setSelectedRoom(null); setSelectedFeature(null); setSelectedFixture(null); }}
+                onDragStart={(e) => handleAnnDragStart(e, a.id)} />
+            ))}
+
+            {/* Shared wall markers */}
+            {(showDimensions || resizing || dragging) && (() => {
+              const segs = detectWallRelationships(rooms);
+              return segs.map((seg, idx) => {
+                const len = seg.orientation === "h" ? Math.abs(seg.x2 - seg.x1) : Math.abs(seg.y2 - seg.y1);
+                if (len < 8) return null;
+                const dimLabel = pxToFtIn(len, pxPerFoot);
+                const color = "#22d3ee";
+                const offset = -16;
+                if (seg.orientation === "h") {
+                  return (
+                    <div key={idx} style={{ position: "absolute", left: seg.x1, top: seg.y1 + offset, width: len, height: 14, zIndex: 12, pointerEvents: "none" }}>
+                      <div style={{ position: "absolute", left: 0, right: 0, top: 6, height: 2, background: `${color}88` }} />
+                      {len > 30 && (
+                        <div style={{ position: "absolute", left: "50%", top: -1, transform: "translateX(-50%)", fontSize: 10, fontWeight: 700, color: "#fff", background: color, padding: "0px 5px", borderRadius: 2, whiteSpace: "nowrap" }}>
+                          {dimLabel}
+                        </div>
+                      )}
+                    </div>
+                  );
+                } else {
+                  return (
+                    <div key={idx} style={{ position: "absolute", left: seg.x1 + offset - 7, top: seg.y1, width: 14, height: len, zIndex: 12, pointerEvents: "none" }}>
+                      <div style={{ position: "absolute", top: 0, bottom: 0, left: 6, width: 2, background: `${color}88` }} />
+                      {len > 30 && (
+                        <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", fontSize: 10, fontWeight: 700, color: "#fff", background: color, padding: "1px 5px", borderRadius: 2, writingMode: "vertical-rl" }}>
+                          {dimLabel}
+                        </div>
+                      )}
+                    </div>
+                  );
+                }
+              });
+            })()}
+          </div>
+
+          {/* Placement hint */}
+          {(addingAnnotation || addingFixture) && (
+            <div style={{
+              position: "absolute", bottom: 20, left: "50%", transform: "translateX(-50%)",
+              background: COLORS.surface, border: `1px solid ${COLORS.yellow}`, borderRadius: 6,
+              padding: "8px 16px", fontSize: 12, color: COLORS.yellow, zIndex: 100,
+              boxShadow: `0 4px 20px ${COLORS.bg}cc`,
+            }}>
+              Click to place {addingAnnotation
+                ? resolveAnnotationType(addingAnnotation)?.label
+                : FIXTURE_TYPES.find((f) => f.type === addingFixture)?.label
+              } \u00b7 ESC to cancel
+            </div>
+          )}
+        </div>
+
+        {/* ═══ PROPERTIES BAR ═══ */}
+        <div className="no-print" style={{
+          minHeight: 48, maxHeight: 240, borderTop: `1px solid ${COLORS.border}`,
+          background: COLORS.surface, padding: "10px 16px", overflowY: "auto",
+        }}>
+          {!selRoom && !selAnn && !selFeat && !selFixture && (
+            <div style={{ fontSize: 11, color: COLORS.textMuted }}>Select a room, annotation, feature, or fixture to edit properties</div>
+          )}
+
+          {/* Room properties (Phase 5: materials) */}
+          {selRoom && !selFeat && !selFixture && (
+            <div style={{ display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+              <div style={{ flex: "1 1 130px", minWidth: 110 }}>
+                <div style={{ fontSize: 9, color: COLORS.textMuted, textTransform: "uppercase", marginBottom: 3 }}>Name</div>
+                <input value={selRoom.name} onChange={(e) => updateRoom(selRoom.id, { name: e.target.value })} style={inputStyle} />
+              </div>
+              <div style={{ flex: "1 1 130px", minWidth: 110 }}>
+                <div style={{ fontSize: 9, color: COLORS.textMuted, textTransform: "uppercase", marginBottom: 3 }}>Dimensions</div>
+                <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                  <input value={selRoom.dimLabel} onChange={(e) => updateRoom(selRoom.id, { dimLabel: e.target.value })} placeholder="auto" style={{ ...inputStyle, flex: 1 }} />
+                  <button onClick={() => updateRoom(selRoom.id, { dimLabel: `${pxToFtIn(selRoom.w, pxPerFoot)} \u00d7 ${pxToFtIn(selRoom.h, pxPerFoot)}` })}
+                    title="Set from current size" style={smallBtn(COLORS.accent)}>\u21BB</button>
+                </div>
+                <div style={{ fontSize: 9, color: COLORS.textDim, marginTop: 2 }}>
+                  {pxToFtIn(selRoom.w, pxPerFoot)} \u00d7 {pxToFtIn(selRoom.h, pxPerFoot)} ({((selRoom.w / pxPerFoot) * (selRoom.h / pxPerFoot)).toFixed(0)} sq ft)
+                </div>
+              </div>
+              <div style={{ flex: "0 0 auto" }}>
+                <div style={{ fontSize: 9, color: COLORS.textMuted, textTransform: "uppercase", marginBottom: 3 }}>Status</div>
+                <div style={{ display: "flex", gap: 4 }}>
+                  <button onClick={() => updateRoom(selRoom.id, { finished: true })} style={btnStyle(selRoom.finished, COLORS.green)}>Finished</button>
+                  <button onClick={() => updateRoom(selRoom.id, { finished: false })} style={btnStyle(!selRoom.finished, COLORS.orange)}>Unfinished</button>
+                </div>
+              </div>
+              <div style={{ flex: "0 0 auto" }}>
+                <div style={{ fontSize: 9, color: COLORS.textMuted, textTransform: "uppercase", marginBottom: 3 }}>Color</div>
+                <div style={{ display: "flex", gap: 3 }}>
+                  {[COLORS.accent, COLORS.cyan, COLORS.green, COLORS.orange, COLORS.red, COLORS.purple, COLORS.yellow].map((c) => (
+                    <div key={c} onClick={() => updateRoom(selRoom.id, { color: c })}
+                      style={{ width: 20, height: 20, borderRadius: 3, background: c, cursor: "pointer", border: selRoom.color === c ? "2px solid white" : "2px solid transparent" }} />
+                  ))}
+                </div>
+              </div>
+              {/* Materials */}
+              <div style={{ flex: "0 0 auto" }}>
+                <div style={{ fontSize: 9, color: COLORS.textMuted, textTransform: "uppercase", marginBottom: 3 }}>Walls</div>
+                <select value={selRoom.wallMaterial} onChange={(e) => updateRoom(selRoom.id, { wallMaterial: e.target.value })} style={selectStyle}>
+                  {WALL_MATERIALS.map((m) => <option key={m} value={m}>{m}</option>)}
+                </select>
+              </div>
+              <div style={{ flex: "0 0 auto" }}>
+                <div style={{ fontSize: 9, color: COLORS.textMuted, textTransform: "uppercase", marginBottom: 3 }}>Floor</div>
+                <select value={selRoom.floorMaterial} onChange={(e) => updateRoom(selRoom.id, { floorMaterial: e.target.value })} style={selectStyle}>
+                  {FLOOR_MATERIALS.map((m) => <option key={m} value={m}>{m}</option>)}
+                </select>
+              </div>
+              <div style={{ flex: "0 0 auto" }}>
+                <div style={{ fontSize: 9, color: COLORS.textMuted, textTransform: "uppercase", marginBottom: 3 }}>Ceiling</div>
+                <select value={selRoom.ceilingType} onChange={(e) => updateRoom(selRoom.id, { ceilingType: e.target.value })} style={selectStyle}>
+                  {CEILING_TYPES.map((m) => <option key={m} value={m}>{m}</option>)}
+                </select>
+              </div>
+              <div style={{ flex: "0 0 auto", alignSelf: "flex-end" }}>
+                <button onClick={() => deleteRoom(selRoom.id)} style={smallBtn(COLORS.red)}>Delete Room</button>
+              </div>
+            </div>
+          )}
+
+          {/* Annotation properties */}
+          {selAnn && (
+            <div style={{ display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+              <div style={{ flex: "0 0 auto" }}>
+                <div style={{ fontSize: 9, color: COLORS.textMuted, textTransform: "uppercase", marginBottom: 3 }}>Type</div>
+                <select value={selAnn.type} onChange={(e) => setAnnotations((prev) => prev.map((a) => a.id === selAnn.id ? { ...a, type: e.target.value } : a))} style={selectStyle}>
+                  {Object.entries(ANNOTATION_CATEGORIES).map(([catKey, cat]) => (
+                    <optgroup key={catKey} label={cat.label}>
+                      {cat.items.map((item) => <option key={item.id} value={item.id}>{item.icon} {item.label}</option>)}
+                    </optgroup>
+                  ))}
+                </select>
+              </div>
+              <div style={{ flex: "1 1 200px", minWidth: 180 }}>
+                <div style={{ fontSize: 9, color: COLORS.textMuted, textTransform: "uppercase", marginBottom: 3 }}>Note</div>
+                <input value={selAnn.note} onChange={(e) => setAnnotations((prev) => prev.map((a) => a.id === selAnn.id ? { ...a, note: e.target.value } : a))}
+                  placeholder="Description..." style={inputStyle} />
+              </div>
+              <div style={{ flex: "0 0 auto", alignSelf: "flex-end" }}>
+                <button onClick={() => deleteAnnotation(selAnn.id)} style={smallBtn(COLORS.red)}>Delete</button>
+              </div>
+            </div>
+          )}
+
+          {/* Feature properties */}
+          {selFeat && (
+            <div style={{ display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+              <div style={{ flex: "0 0 auto" }}>
+                <div style={{ fontSize: 9, color: COLORS.textMuted, textTransform: "uppercase", marginBottom: 3 }}>Type</div>
+                <div style={{ display: "flex", gap: 4 }}>
+                  {FEATURE_TYPES.map((f) => (
+                    <button key={f.type} onClick={() => { pushHistory(); setFeatures((prev) => prev.map((ft) => ft.id === selFeat.id ? { ...ft, type: f.type } : ft)); }}
+                      style={btnStyle(selFeat.type === f.type)}>{f.icon} {f.label}</button>
+                  ))}
+                </div>
+              </div>
+              <div style={{ flex: "0 0 auto" }}>
+                <div style={{ fontSize: 9, color: COLORS.textMuted, textTransform: "uppercase", marginBottom: 3 }}>Wall</div>
+                <div style={{ display: "flex", gap: 4 }}>
+                  {["top", "right", "bottom", "left"].map((w) => (
+                    <button key={w} onClick={() => { pushHistory(); setFeatures((prev) => prev.map((ft) => ft.id === selFeat.id ? { ...ft, wall: w } : ft)); }}
+                      style={btnStyle(selFeat.wall === w)}>{w}</button>
+                  ))}
+                </div>
+              </div>
+              <div style={{ flex: "1 1 80px", minWidth: 70 }}>
+                <div style={{ fontSize: 9, color: COLORS.textMuted, textTransform: "uppercase", marginBottom: 3 }}>Position</div>
+                <input type="number" value={selFeat.pos} onChange={(e) => { pushHistory(); setFeatures((prev) => prev.map((ft) => ft.id === selFeat.id ? { ...ft, pos: Number(e.target.value) } : ft)); }}
+                  style={{ ...inputStyle, width: 80 }} />
+              </div>
+              <div style={{ flex: "0 0 auto", alignSelf: "flex-end" }}>
+                <button onClick={() => deleteFeature(selFeat.id)} style={smallBtn(COLORS.red)}>Delete</button>
+              </div>
+            </div>
+          )}
+
+          {/* Fixture properties */}
+          {selFixture && (
+            <div style={{ display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+              <div style={{ flex: "0 0 auto" }}>
+                <div style={{ fontSize: 9, color: COLORS.textMuted, textTransform: "uppercase", marginBottom: 3 }}>Fixture</div>
+                <select value={selFixture.type} onChange={(e) => {
+                  pushHistory();
+                  const ft = FIXTURE_TYPES.find((f) => f.type === e.target.value);
+                  setFixtures((prev) => prev.map((f) => f.id === selFixture.id ? { ...f, type: e.target.value, w: ft.w * pxPerFoot, h: ft.h * pxPerFoot } : f));
+                }} style={selectStyle}>
+                  {FIXTURE_TYPES.map((f) => <option key={f.type} value={f.type}>{f.label}</option>)}
+                </select>
+              </div>
+              <div style={{ flex: "0 0 auto" }}>
+                <div style={{ fontSize: 9, color: COLORS.textMuted, textTransform: "uppercase", marginBottom: 3 }}>Rotation</div>
+                <div style={{ display: "flex", gap: 4 }}>
+                  {[0, 90, 180, 270].map((deg) => (
+                    <button key={deg} onClick={() => { pushHistory(); setFixtures((prev) => prev.map((f) => f.id === selFixture.id ? { ...f, rotation: deg } : f)); }}
+                      style={btnStyle(selFixture.rotation === deg, COLORS.cyan)}>{deg}\u00b0</button>
+                  ))}
+                </div>
+              </div>
+              <div style={{ flex: "0 0 auto" }}>
+                <div style={{ fontSize: 9, color: COLORS.textMuted, textTransform: "uppercase", marginBottom: 3 }}>Room</div>
+                <select value={selFixture.roomId} onChange={(e) => { pushHistory(); setFixtures((prev) => prev.map((f) => f.id === selFixture.id ? { ...f, roomId: e.target.value } : f)); }} style={selectStyle}>
+                  {rooms.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+                </select>
+              </div>
+              <div style={{ flex: "0 0 auto" }}>
+                <div style={{ fontSize: 9, color: COLORS.textMuted, textTransform: "uppercase", marginBottom: 3 }}>Size</div>
+                <div style={{ fontSize: 10, color: COLORS.textDim }}>
+                  {pxToFtIn(selFixture.w, pxPerFoot)} \u00d7 {pxToFtIn(selFixture.h, pxPerFoot)}
+                </div>
+              </div>
+              <div style={{ flex: "0 0 auto", alignSelf: "flex-end" }}>
+                <button onClick={() => deleteFixture(selFixture.id)} style={smallBtn(COLORS.red)}>Delete</button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Mount ─────────────────────────────────────────────────────────
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(React.createElement(FloorPlanEditor));
+</script>
+</body>
+</html>
