@@ -567,6 +567,22 @@ function FloorPlanEditor() {
   }, [rooms, annotations, features, fixtures, pxPerFoot, showDimensions, loaded, buildSaveData]);
 
   // ── Export/Import ───────────────────────────────────────────
+  const [savedPlans, setSavedPlans] = useState([]);
+
+  // Load saved plans list from localStorage registry
+  useEffect(() => {
+    try {
+      const registry = JSON.parse(localStorage.getItem("floorplan:plans-registry") || "[]");
+      setSavedPlans(registry);
+    } catch (e) { /* ignore */ }
+  }, []);
+
+  const updatePlansRegistry = (registry) => {
+    localStorage.setItem("floorplan:plans-registry", JSON.stringify(registry));
+    setSavedPlans(registry);
+  };
+
+  // Export to browser download (for git commit workflow)
   const handleExport = () => {
     const data = buildSaveData();
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
@@ -574,6 +590,44 @@ function FloorPlanEditor() {
     const a = document.createElement("a");
     a.href = url; a.download = `basement-floorplan-${new Date().toISOString().slice(0, 10)}.json`;
     a.click(); URL.revokeObjectURL(url);
+  };
+
+  // Save plan to localStorage plans registry (named saves)
+  const handleSavePlan = (name) => {
+    const data = buildSaveData();
+    const planKey = `floorplan:plan:${name}`;
+    localStorage.setItem(planKey, JSON.stringify(data));
+    const registry = JSON.parse(localStorage.getItem("floorplan:plans-registry") || "[]");
+    const existing = registry.findIndex((p) => p.name === name);
+    const entry = { name, savedAt: new Date().toISOString(), rooms: data.rooms.length, fixtures: data.fixtures.length, annotations: data.annotations.length };
+    if (existing >= 0) registry[existing] = entry;
+    else registry.push(entry);
+    updatePlansRegistry(registry);
+    setSaveStatus("saved");
+  };
+
+  // Load a named plan from localStorage
+  const handleLoadPlan = (name) => {
+    try {
+      const raw = localStorage.getItem(`floorplan:plan:${name}`);
+      if (!raw) { alert(`Plan "${name}" not found.`); return; }
+      const data = JSON.parse(raw);
+      if (data.rooms) setRooms(data.rooms.map(applyRoomDefaults));
+      if (data.annotations) setAnnotations(data.annotations);
+      if (data.features) setFeatures(data.features);
+      if (data.fixtures) setFixtures(data.fixtures || []);
+      if (data.pxPerFoot) setPxPerFoot(data.pxPerFoot);
+      if (data.showDimensions !== undefined) setShowDimensions(data.showDimensions);
+      clearSelection();
+      setSaveStatus("saved");
+    } catch (err) { alert("Could not load plan."); }
+  };
+
+  // Delete a named plan
+  const handleDeletePlan = (name) => {
+    localStorage.removeItem(`floorplan:plan:${name}`);
+    const registry = JSON.parse(localStorage.getItem("floorplan:plans-registry") || "[]");
+    updatePlansRegistry(registry.filter((p) => p.name !== name));
   };
 
   const handleImport = (e) => {
@@ -903,7 +957,7 @@ function FloorPlanEditor() {
 
         {/* Tab bar */}
         <div style={{ display: "flex", borderBottom: `1px solid ${COLORS.border}` }}>
-          {[["rooms", "Rooms"], ["annotate", "Annotate"], ["features", "Features"], ["fixtures", "Fixtures"]].map(([key, label]) => (
+          {[["rooms", "Rooms"], ["annotate", "Annotate"], ["features", "Features"], ["fixtures", "Fixtures"], ["plans", "Plans"]].map(([key, label]) => (
             <button key={key} onClick={() => setPanel(key)} style={{
               flex: 1, padding: "8px 0", border: "none", cursor: "pointer", fontSize: 10, fontWeight: 600,
               fontFamily: "'Courier New', monospace", letterSpacing: 0.5,
@@ -1092,6 +1146,58 @@ function FloorPlanEditor() {
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {/* ═══ PLANS PANEL ═══ */}
+          {panel === "plans" && (
+            <div>
+              <div style={{ fontSize: 10, color: COLORS.textMuted, marginBottom: 8, textTransform: "uppercase", letterSpacing: 1 }}>Save Current Plan</div>
+              <div style={{ display: "flex", gap: 4 }}>
+                <input id="plan-name-input" placeholder="Plan name..." style={{ ...inputStyle, flex: 1 }}
+                  onKeyDown={(e) => { if (e.key === "Enter" && e.target.value.trim()) { handleSavePlan(e.target.value.trim()); e.target.value = ""; } }} />
+                <button onClick={() => {
+                  const inp = document.getElementById("plan-name-input");
+                  if (inp?.value.trim()) { handleSavePlan(inp.value.trim()); inp.value = ""; }
+                }} style={smallBtn(COLORS.green)}>Save</button>
+              </div>
+              <div style={{ fontSize: 9, color: COLORS.textDim, marginTop: 4 }}>
+                Saves a named snapshot. Use Export for JSON file download.
+              </div>
+
+              <div style={{ fontSize: 10, color: COLORS.textMuted, margin: "16px 0 8px", textTransform: "uppercase", letterSpacing: 1 }}>Saved Plans ({savedPlans.length})</div>
+              {savedPlans.length === 0 && (
+                <div style={{ fontSize: 11, color: COLORS.textMuted, padding: 8 }}>No saved plans yet.</div>
+              )}
+              {savedPlans.map((p) => (
+                <div key={p.name} style={{
+                  padding: "8px 10px", marginBottom: 4, borderRadius: 4,
+                  border: `1px solid ${COLORS.border}`, background: "transparent",
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: COLORS.text }}>{p.name}</span>
+                    <div style={{ display: "flex", gap: 4 }}>
+                      <button onClick={() => handleLoadPlan(p.name)} style={smallBtn(COLORS.accent)}>Load</button>
+                      <button onClick={() => handleDeletePlan(p.name)} style={smallBtn(COLORS.red)}>\u00d7</button>
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 9, color: COLORS.textMuted, marginTop: 2 }}>
+                    {p.rooms} rooms \u00b7 {p.fixtures} fixtures \u00b7 {p.annotations} annotations
+                  </div>
+                  <div style={{ fontSize: 9, color: COLORS.textDim }}>
+                    {new Date(p.savedAt).toLocaleDateString()} {new Date(p.savedAt).toLocaleTimeString()}
+                  </div>
+                </div>
+              ))}
+
+              <div style={{ fontSize: 10, color: COLORS.textMuted, margin: "16px 0 8px", textTransform: "uppercase", letterSpacing: 1 }}>File Operations</div>
+              <div style={{ display: "flex", gap: 4 }}>
+                <button onClick={handleExport} style={{ ...smallBtn(COLORS.green), flex: 1, textAlign: "center" }}>\u2193 Export JSON</button>
+                <button onClick={() => fileInputRef.current?.click()} style={{ ...smallBtn(COLORS.orange), flex: 1, textAlign: "center" }}>\u2191 Import JSON</button>
+              </div>
+              <div style={{ fontSize: 9, color: COLORS.textDim, marginTop: 6, lineHeight: 1.4 }}>
+                Export downloads a JSON file. Save it to the <span style={{ color: COLORS.accent }}>plans/</span> directory in the repo, then commit &amp; push to sync.
+              </div>
             </div>
           )}
         </div>
